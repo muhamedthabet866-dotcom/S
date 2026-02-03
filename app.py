@@ -4,139 +4,98 @@ from docx import Document
 import re
 import io
 
-def extract_metadata_from_word(doc):
-    """استخراج تسميات المتغيرات من قسم 'Where' في ملف الوورد"""
-    mapping = {}
-    full_text = "\n".join([p.text for p in doc.paragraphs])
-    # البحث عن نمط X1 = Label
-    matches = re.findall(r"(X\d+)\s*=\s*([^(\n\r\t]+)", full_text, re.IGNORECASE)
-    for var, label in matches:
-        mapping[var.upper()] = label.strip()
-    return mapping
-
-def generate_spss_v26_pro_engine(doc_upload, excel_columns):
+def advanced_master_engine_v32(doc_upload):
     doc_bytes = doc_upload.read()
-    doc = Document(io.BytesIO(doc_bytes))
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    
-    var_labels = extract_metadata_from_word(doc)
-    
-    # بداية السينتاكس بتنسيق احترافي
-    syntax = [
-        "* Encoding: UTF-8.",
-        "* -------------------------------------------------------------------------",
-        "* MBA STATISTICAL ANALYSIS REPORT - SPSS SYNTAX v26",
-        "* -------------------------------------------------------------------------",
-        "\n* [1] SETUP: VARIABLE LABELS AND DATA PREPARATION."
-    ]
-    
-    # 1. تعريف التسميات (Labels)
-    if var_labels:
-        syntax.append("VARIABLE LABELS")
-        for var, lbl in var_labels.items():
-            syntax.append(f"  {var} \"{lbl}\"")
-        syntax[-1] = syntax[-1] + "."
-    
-    # 2. تعريف القيم (Value Labels) - افتراضي بناءً على المنهج
-    syntax.append("\nVALUE LABELS X4 0 'No' 1 'Yes' /X5 0 'No' 1 'Yes' /X2 0 'National' 1 'American'.")
+    try:
+        doc = Document(io.BytesIO(doc_bytes))
+        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    except:
+        paragraphs = re.findall(r'[ -~]{5,}', doc_bytes.decode('ascii', errors='ignore'))
 
-    # 3. معالجة الأسئلة وتحويلها لأوامر (Chapters 1-10)
-    q_count = 2
+    mapping = {}
+    for p in paragraphs:
+        match = re.search(r"([Xx]\d+)\s*=\s*([^(\n\r.]+)", p, re.IGNORECASE)
+        if match:
+            v_name = match.group(1).upper()
+            v_label = match.group(2).strip()
+            mapping[v_name] = v_label
+
+    syntax = ["* Encoding: UTF-8.\n"]
+    for var, lbl in mapping.items():
+        syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
+    
+    syntax.append("VALUE LABELS X4 0 'No' 1 'Yes' /X5 0 'No' 1 'Yes' /X6 1 'City 1' 2 'City 2' 3 'City 3' 4 'City 4'.")
+    syntax.append("SET DECIMAL=DOT.\n")
+
     for p in paragraphs:
         p_low = p.lower()
+        if re.search(r"X\d+\s*=", p): continue
         
-        # تجاهل أسطر التعريف في نهاية الملف
-        if "where:" in p_low or re.match(r"^x\d+\s*=", p_low):
-            continue
+        found_vars = [v for v in mapping.keys() if v in p.upper() or mapping[v].lower()[:10] in p_low]
+        if "balance" in p_low: found_vars.append("X1")
+        if "transaction" in p_low: found_vars.append("X2")
+        found_vars = list(dict.fromkeys(found_vars))
 
-        syntax.append(f"\n* [{q_count}] QUESTION: {p}.")
-        
-        # --- الإحصاء الوصفي (Chapter 2) ---
-        if "frequency table" in p_low:
-            if "classes" in p_low or "k rule" in p_low:
-                syntax.append(f"* Applying K-Rule or Class Intervals for continuous data.")
-                syntax.append(f"FREQUENCIES VARIABLES=X1 X2 /FORMAT=NOTABLE /HISTOGRAM /PERCENTILES=25 50 75.")
+        if not found_vars and "normality" not in p_low: continue
+        syntax.append(f"\n* QUESTION: {p}.")
+
+        # 1. منطق تقسيم الفئات (RECODE) - حل مشكلة السؤال 2 و 3
+        if "frequency table" in p_low and "classes" in p_low:
+            target = "X1" if "balance" in p_low else "X2"
+            if target == "X1":
+                syntax.append("RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) (1500.01 thru HI=4) INTO X1_Classes.")
+                syntax.append("VALUE LABELS X1_Classes 1 '0-500' 2 '501-1000' 3 '1001-1500' 4 'Over 1500'.")
+                syntax.append("FREQUENCIES VARIABLES=X1_Classes.")
+            else: # السؤال 3 (K-rule)
+                syntax.append("RECODE X2 (0 thru 5=1) (5.01 thru 10=2) (10.01 thru 15=3) (15.01 thru 20=4) (20.01 thru HI=5) INTO X2_Classes.")
+                syntax.append("VALUE LABELS X2_Classes 1 '0-5' 2 '6-10' 3 '11-15' 4 '16-20' 5 'Over 20'.")
+                syntax.append("FREQUENCIES VARIABLES=X2_Classes.")
+
+        # 2. الإحصاء الوصفي (السؤال 4 و 6) - منع التكرار
+        elif any(w in p_low for w in ["mean", "median", "calculate", "skewness"]):
+            if "discuss" not in p_low: # تنفيذ الأمر للسؤال 4 فقط وتجنب تكراره في 6
+                syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS SESKEW /FORMAT=NOTABLE.")
             else:
-                syntax.append(f"FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.")
+                syntax.append("ECHO 'Refer to Statistics table from Question 4 to discuss skewness'.")
 
-        elif any(word in p_low for word in ["mean", "median", "mode", "standard deviation"]):
-            syntax.append(f"DESCRIPTIVES VARIABLES=X1 X2 X3\n  /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS.")
-
-        # --- الرسوم البيانية (Chapter 2) ---
-        elif "histogram" in p_low:
-            syntax.append("GRAPH /HISTOGRAM=X1.\nGRAPH /HISTOGRAM=X2.")
-            
+        # 3. الرسوم البيانية (Bar, Histogram, Pie)
         elif "bar chart" in p_low:
-            if "average" in p_low or "mean" in p_low:
-                if "each city" in p_low:
-                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6 /TITLE='Average Balance by City'.")
+            if "average" in p_low:
+                if "grouped" in p_low or "one graph" in p_low:
+                    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4.")
                 else:
-                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X4 /TITLE='Average Salary'.")
-            elif "percentage" in p_low:
-                syntax.append("GRAPH /BAR(SIMPLE)=PCT BY X5 /TITLE='Percentage Distribution'.")
-
-        elif "pie chart" in p_low:
-            syntax.append("GRAPH /PIE=PCT BY X5 /TITLE='Percentage Distribution'.")
-
-        # --- الاستدلال والتوزيع الطبيعي (Chapter 3) ---
-        elif "normality" in p_low or "confidence interval" in p_low:
-            syntax.append(f"EXAMINE VARIABLES=X1\n  /PLOT NPPLOT\n  /CINTERVAL 95\n  /STATISTICS DESCRIPTIVES.")
-
-        elif "outliers" in p_low:
-            syntax.append(f"EXAMINE VARIABLES=X1 /PLOT BOXPLOT /STATISTICS DESCRIPTIVES /EXTREME(5).")
-
-        # --- اختبارات الفرضيات (Chapter 4, 5, 6) ---
-        elif "test the hypothesis" in p_low or "difference" in p_low:
-            if "independent" in p_low or "two" in p_low:
-                syntax.append("T-TEST GROUPS=X4(0 1) /VARIABLES=X1.")
-            elif "anova" in p_low or "more than two" in p_low or "region" in p_low:
-                syntax.append("ONEWAY X1 BY X11 /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).")
+                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
+            elif "maximum" in p_low:
+                syntax.append("GRAPH /BAR(SIMPLE)=MAX(X2) BY X4.")
             else:
-                syntax.append("T-TEST /TESTVAL=90 /VARIABLES=X7.") # اختبار عينة واحدة كما في Dataset 2
+                syntax.append(f"GRAPH /BAR(SIMPLE)=PCT BY {found_vars[0] if found_vars else 'X5'}.")
 
-        # --- الارتباط والانحدار (Chapter 8, 9, 10) ---
-        elif "correlation" in p_low:
-            syntax.append("CORRELATIONS /VARIABLES=X1 X2 X3 /PRINT=TWOTAIL /METHOD=PEARSON.")
+        elif "histogram" in p_low:
+            for v in ["X1", "X2"]: syntax.append(f"GRAPH /HISTOGRAM={v}.")
 
-        elif "regression" in p_low or "predict" in p_low:
-            # الانحدار المتعدد (Chapter 10) مع اختبار التعددية الخطية
-            syntax.append("REGRESSION\n  /STATISTICS COEFF OUTS R ANOVA COLLIN TOL\n  /DEPENDENT X5\n  /METHOD=ENTER X1 X2 X3 X4 X6.")
+        # 4. فترات الثقة (فصل الجداول بناءً على طلبك)
+        elif "confidence interval" in p_low:
+            for val in ["95", "99"]:
+                syntax.append(f"EXAMINE VARIABLES=X1 /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
 
-        q_count += 1
+        # 5. النورمالتي والقيم الشاذة
+        elif "normality" in p_low:
+            syntax.append("EXAMINE VARIABLES=X1 /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
+        elif "outliers" in p_low:
+            syntax.append("EXAMINE VARIABLES=X1 /PLOT BOXPLOT /STATISTICS DESCRIPTIVES /EXTREME(5).")
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="MBA SPSS Engine", layout="wide")
-st.title("📊 نظام توليد تقارير SPSS المتكامل (MBA v26)")
-st.markdown("يرتبط هذا النظام مباشرة بملفات المنهج والتمارين لضمان مخرجات دقيقة.")
-
-col1, col2 = st.columns(2)
-with col1:
-    u_excel = st.file_uploader("1. ارفع ملف الإكسيل (Data set)", type=['xlsx', 'xls', 'csv'])
-with col2:
-    u_word = st.file_uploader("2. ارفع ملف الوورد (Questions)", type=['docx', 'doc'])
+# واجهة Streamlit
+st.title("🧙‍♂️ المحرك الإحصائي الذكي (v32)")
+u_excel = st.file_uploader("ارفع ملف الإكسيل", type=['xlsx', 'xls', 'csv'])
+u_word = st.file_uploader("ارفع ملف الوورد", type=['docx', 'doc'])
 
 if u_excel and u_word:
     try:
-        # معالجة ملف الإكسيل
-        if u_excel.name.endswith('.csv'):
-            df = pd.read_csv(u_excel)
-        else:
-            df = pd.read_excel(u_excel)
-        
-        # توليد الـ Syntax
-        final_syntax = generate_spss_v26_pro_engine(u_word, df.columns.tolist())
-        
-        st.success("✅ تم تحليل الأسئلة وربطها بالبيانات والمنهج!")
+        final_syntax = advanced_master_engine_v32(u_word)
         st.code(final_syntax, language='spss')
-        
-        st.download_button(
-            label="تحميل ملف السينتاكس الجاهز (.sps)",
-            data=final_syntax,
-            file_name=f"SPSS_Analysis_Solution.sps",
-            mime="text/plain"
-        )
+        st.download_button("تحميل السينتاكس المطور (.sps)", final_syntax, "Advanced_Solution_v32.sps")
     except Exception as e:
-        st.error(f"خطأ: تأكد من أن الملفات مطابقة للمواصفات. التفاصيل: {e}")
+        st.error(f"Error: {e}")
