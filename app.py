@@ -6,7 +6,7 @@ import io
 
 # 1. إعداد واجهة البرمجة (API) لـ Gemini
 # احصل على مفتاحك من https://aistudio.google.com/
-genai.configure(api_key="ضع_مفتاحك_هنا_YOUR_API_KEY")
+genai.configure(api_key="AIzaSyBOoryKbkBskgLby5HlUUxtTPO8Oby8744")
 
 def ask_gemini_for_syntax(questions, data_summary):
     model = genai.GenerativeModel('gemini-pro')
@@ -68,3 +68,4 @@ if u_excel and u_word:
                 )
             except Exception as e:
                 st.error(f"حدث خطأ في الاتصال بـ Gemini: {e}")
+
