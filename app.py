@@ -3,73 +3,97 @@ import pandas as pd
 from docx import Document
 import re
 
-def extract_spss_mapping(doc_file):
+# دالة ذكية لاستخراج خريطة المتغيرات والأسئلة
+def analyze_spss_document(doc_file):
     doc = Document(doc_file)
-    mapping = {}
-    # البحث عن الأسطر التي تبدأ بـ X متبوعة برقم (مثل X1, X2)
-    pattern = r"X(\d+)\s*=\s*(.*)"
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     
-    for p in doc.paragraphs:
-        text = p.text.strip()
-        match = re.search(pattern, text)
+    mapping = {}
+    questions = []
+    
+    # 1. فصل التعريفات (Where) عن أسئلة التحليل
+    for p in paragraphs:
+        # البحث عن التعريفات مثل X1 = ...
+        match = re.search(r"(X\d+)\s*=\s*([^(\n]+)", p, re.IGNORECASE)
         if match:
-            var_num = f"X{match.group(1)}" # سيعطي X1
-            var_label = match.group(2).strip() # سيعطي نص السؤال
-            
-            # محاولة استخراج القيم (Value Labels) إذا وجدت في نفس السطر مثل (1 = yes)
-            values = re.findall(r"(\d+)\s*=\s*([a-zA-Zأ-ي]+)", var_label)
-            mapping[var_num] = {
-                "label": var_label,
-                "values": values
-            }
-    return mapping
+            var_name = match.group(1).upper()
+            var_label = match.group(2).strip()
+            # استخراج القيم (Value Labels) إن وجدت مثل (1=yes)
+            values = re.findall(r"(\d+)\s*=\s*([a-zA-Zأ-ي]+)", p)
+            mapping[var_name] = {"label": var_label, "values": values}
+        else:
+            # أي سطر آخر يحتوي على كلمات تحليلية نعتبره سؤالاً
+            if any(word in p.lower() for word in ['construct', 'calculate', 'draw', 'test', 'mean', 'chart']):
+                questions.append(p)
+                
+    return mapping, questions
 
-st.set_page_config(page_title="SPSS Syntax Pro - Eng. Mohamed", layout="wide")
-st.title("📊 محول البيانات الذكي لسينتاكس SPSS")
+def generate_scientific_syntax(mapping, questions, excel_cols):
+    syntax = ["* SPSS Syntax Generated for SPSS v26 - Professional Analysis.\n"]
+    
+    # تعريف المتغيرات أولاً (Variable & Value Labels)
+    for var, info in mapping.items():
+        if var in [c.upper() for c in excel_cols]:
+            syntax.append(f"VARIABLE LABELS {var} '{info['label']}'.")
+            if info['values']:
+                syntax.append(f"VALUE LABELS {var}")
+                for val, lab in info['values']:
+                    syntax.append(f"  {val} '{lab}'")
+                syntax.append(".")
 
-col1, col2 = st.columns(2)
-with col1:
-    up_excel = st.file_uploader("ارفع ملف الإكسيل (Data Set)", type=['xlsx', 'xls', 'csv'])
-with col2:
-    up_word = st.file_uploader("ارفع ملف الوورد (Questions)", type=['docx', 'doc'])
+    syntax.append("\n* --- Start of Scientific Analysis ---.\n")
+
+    # تحليل كل سؤال وتوليد الكود المقابل له
+    for q in questions:
+        q_low = q.lower()
+        # تحديد المتغيرات المذكورة في السؤال
+        found_vars = [v for v in mapping.keys() if v in q.upper() or mapping[v]['label'].lower() in q_low]
+        if not found_vars: found_vars = [v for v in mapping.keys() if v in q.upper()]
+
+        # أ. الجداول التكرارية
+        if "frequency table" in q_low:
+            syntax.append(f"* {q}.\nFREQUENCIES VARIABLES={' '.join(found_vars)} /ORDER=ANALYSIS.")
+        
+        # ب. الإحصاء الوصفي (Mean, Median, etc.)
+        elif any(word in q_low for word in ["mean", "median", "mode", "calculate"]):
+            syntax.append(f"* {q}.\nDESCRIPTIVES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN STDDEV MIN MAX KURTOSIS SKEWNESS.")
+
+        # ج. الرسوم البيانية
+        elif "histogram" in q_low:
+            for v in found_vars:
+                syntax.append(f"GRAPH /HISTOGRAM={v} /TITLE='Histogram of {v}'.")
+        
+        elif "bar chart" in q_low:
+            if len(found_vars) >= 2:
+                syntax.append(f"GRAPH /BAR(MEAN)={found_vars[0]} BY {found_vars[1]}.")
+            else:
+                syntax.append(f"GRAPH /BAR(COUNT) BY {' '.join(found_vars)}.")
+
+        # د. اختبارات الفرضيات (T-Test)
+        elif "test the hypothesis" in q_low or "difference" in q_low:
+            if len(found_vars) >= 2:
+                syntax.append(f"T-TEST GROUPS={found_vars[1]}(0 1) /VARIABLES={found_vars[0]}.")
+
+    syntax.append("\nEXECUTE.")
+    return "\n".join(syntax)
+
+# واجهة تطبيق Streamlit
+st.set_page_config(page_title="SPSS Scientific Generator", layout="wide")
+st.title("🔬 المولد العلمي لسينتاكس SPSS v26")
+
+up_excel = st.file_uploader("1. ارفع ملف الإكسيل", type=['xlsx', 'xls'])
+up_word = st.file_uploader("2. ارفع ملف الوورد (docx فقط)", type=['docx'])
 
 if up_excel and up_word:
-    # قراءة الإكسيل
     df = pd.read_excel(up_excel)
-    # استخراج التعريفات من الوورد
-    word_mapping = extract_spss_mapping(up_word)
+    mapping, questions = analyze_spss_document(up_word)
     
-    st.subheader("📋 نتيجة مطابقة المتغيرات")
-    
-    if not word_mapping:
-        st.error("لم يتم العثور على تعريفات تبدأ بـ X1, X2 في ملف الوورد. تأكد من وجود قسم 'Where' في نهاية الملف.")
+    if mapping:
+        st.success(f"تم اكتشاف {len(mapping)} متغيرات و {len(questions)} طلبات تحليل.")
+        final_syntax = generate_scientific_syntax(mapping, questions, df.columns)
+        
+        st.subheader("السينتاكس العلمي الناتج:")
+        st.code(final_syntax, language='spss')
+        st.download_button("تحميل الملف جاهزاً للتشغيل على SPSS v26", final_syntax, "analysis_v26.sps")
     else:
-        preview_data = []
-        syntax_lines = ["* SPSS Syntax Generated based on Variable Definitions.\n"]
-        
-        for col in df.columns:
-            # تنظيف اسم العمود (تحويله لـ uppercase ليطابق X1 بدلاً من x1)
-            clean_col = col.strip().upper()
-            if clean_col in word_mapping:
-                label = word_mapping[clean_col]["label"]
-                vals = word_mapping[clean_col]["values"]
-                
-                preview_data.append({"العمود": col, "الوصف المستخرج": label, "عدد القيم": len(vals)})
-                
-                # إضافة VARIABLE LABELS
-                syntax_lines.append(f"VARIABLE LABELS {col} '{label}'.")
-                
-                # إضافة VALUE LABELS
-                if vals:
-                    syntax_lines.append(f"VALUE LABELS {col}")
-                    for val_num, val_text in vals:
-                        syntax_lines.append(f"  {val_num} '{val_text}'")
-                    syntax_lines.append(".")
-
-        st.table(preview_data)
-        
-        if st.button("توليد ملف السينتاكس 🚀"):
-            syntax_lines.append("\nEXECUTE.")
-            final_code = "\n".join(syntax_lines)
-            st.code(final_code, language='spss')
-            st.download_button("تحميل .sps", final_code, "SPSS_Analysis.sps")
+        st.warning("لم يتم العثور على تعريفات للمتغيرات (X1, X2...) في ملف الوورد.")
