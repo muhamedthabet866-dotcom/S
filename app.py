@@ -6,55 +6,65 @@ import statsmodels.api as sm
 from docx import Document
 import io
 
-# دالة التحليل الإحصائي المباشر (Validation)
-def perform_live_analysis(df, test_val=35000):
-    # حساب الإحصاء الوصفي [cite: 5, 24]
-    desc = df.describe()
+# 1. دالة التحليل الحي الذكي (تتجنب KeyError)
+def perform_live_analysis(df):
+    # تحويل أسماء الأعمدة لحروف صغيرة للمطابقة
+    df.columns = [c.lower() for c in df.columns]
     
-    # اختبار ت لعينة واحدة (One-Sample T-test) [cite: 10, 28]
-    # نفترض x3 هو المتغير المطلوب اختباره
-    t_stat, p_val = stats.ttest_1samp(df['x3'].dropna(), test_val)
+    analysis_results = {}
     
-    return desc, p_val
+    # البحث عن عمود يمثل "الراتب" أو "الرصيد" أو المتغير x3
+    target_col = None
+    for col in ['x3', 'salary', 'balance', 'area']:
+        if col in df.columns:
+            target_col = col
+            break
+            
+    if target_col:
+        # حساب الإحصاء الوصفي (Mean, Median, Skewness) [cite: 24, 34]
+        analysis_results['mean'] = df[target_col].mean()
+        analysis_results['median'] = df[target_col].median()
+        analysis_results['skew'] = df[target_col].skew()
+        
+        # اختبار ت لعينة واحدة (قيمة افتراضية 35000 أو 600) 
+        test_val = 35000 if 'salary' in target_col or 'x3' in target_col else 600
+        t_stat, p_val = stats.ttest_1samp(df[target_col].dropna(), test_val)
+        analysis_results['p_val'] = p_val
+    
+    return analysis_results
 
-# دالة توليد السينتاكس (SPSS Generation)
-def generate_spss_syntax(df, var_map):
-    syntax = [
-        "* Encoding: UTF-8.",
-        "* --- [Step 1: Variables Setup] --- .",
-        "VARIABLE LABELS"
-    ]
-    # إضافة مسميات المتغيرات ديناميكياً [cite: 16, 34]
-    labels = [f"  {col} \"{var_map.get(col.lower(), col)}\"" for col in df.columns]
-    syntax.append(" /\n".join(labels) + ".")
-    
-    # إضافة اختبارات الفرضيات والارتباط [cite: 11, 30]
-    syntax.append("\n* --- [Hypothesis Testing] --- .")
-    syntax.append(f"T-TEST /TESTVAL=35000 /VARIABLES=x3.")
-    
-    return "\n".join(syntax)
+# --- واجهة المستخدم ---
+st.title("📊 نظام التحليل الإحصائي الشامل (v5)")
 
-# --- واجهة المستخدم Streamlit ---
-st.title("📊 منصة التحليل الإحصائي الذكي (MBA Edition)")
+u_excel = st.file_uploader("ارفع ملف الإكسيل", type=['xlsx', 'xls', 'csv'])
 
-u_excel = st.file_uploader("ارفع ملف البيانات (Excel)", type=['xlsx'])
-u_word = st.file_uploader("ارفع ملف الأسئلة (Word)", type=['docx'])
-
-if u_excel and u_word:
-    df = pd.read_excel(u_excel)
-    
-    # عرض نتائج سريعة (Live Analysis) قبل تحميل السينتاكس
-    st.subheader("💡 نتائج تحليل سريعة (Validation)")
-    desc, p_val = perform_live_analysis(df)
-    
-    col1, col2 = st.columns(2)
-    col1.metric("P-Value (Salary Test)", f"{p_val:.4f}")
-    col2.write("القرار الإحصائي:")
-    if p_val < 0.05:
-        col2.error("رفض الفرضية الصفرية (يوجد فرق دال إحصائياً) [cite: 11, 30]")
+if u_excel:
+    # قراءة الملف مع معالجة النوع (CSV أو Excel)
+    if u_excel.name.endswith('.csv'):
+        df = pd.read_csv(u_excel)
     else:
-        col2.success("قبول الفرضية الصفرية (لا يوجد فرق دال إحصائياً) [cite: 11, 30]")
+        df = pd.read_excel(u_excel)
+        
+    st.write("✅ تم تحميل الأعمدة التالية:", df.columns.tolist())
 
-    # توليد وتحميل السينتاكس
-    # (هنا يتم استدعاء دالة التوليد التي تم شرحها سابقاً)
-    st.download_button("تحميل كود SPSS المعتمد (.sps)", "SYNTAX CONTENT HERE", "analysis.sps")
+    # إجراء التحليل المباشر
+    try:
+        results = perform_live_analysis(df)
+        
+        if results:
+            st.subheader("💡 المعاينة الإحصائية السريعة")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("المتوسط (Mean)", f"{results['mean']:.2f}")
+            col2.metric("الوسيط (Median)", f"{results['median']:.2f}")
+            col3.metric("P-Value", f"{results['p_val']:.4f}")
+            
+            # قرار اختبار الفرضية [cite: 19, 30]
+            if results['p_val'] < 0.05:
+                st.error("القرار: نرفض الفرضية الصفرية (يوجد فرق دال إحصائياً)")
+            else:
+                st.success("القرار: نقبل الفرضية الصفرية (لا يوجد فرق دال)")
+        else:
+            st.warning("لم يتم العثور على أعمدة متوافقة للتحليل الآلي (x3 أو Salary).")
+            
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء التحليل: {e}")
