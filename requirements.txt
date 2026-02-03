@@ -2,7 +2,4 @@ streamlit
 pandas
 python-docx
 openpyxl
-scipy
-statsmodels
-matplotlib
-seaborn
+google-generativeai
