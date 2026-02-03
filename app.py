@@ -69,8 +69,8 @@ if u_excel and u_word:
         questions = ""
 
     if st.button("🚀 توليد السينتاكس بواسطة الذكاء الاصطناعي"):
-        if not API_KEY or API_KEY == "ضع_مفتاحك_هنا":
-            st.warning("AIzaSyBOoryKbkBskgLby5HlUUxtTPO8Oby8744")
+        if not API_KEY or API_KEY == "AIzaSyBOoryKbkBskgLby5HlUUxtTPO8Oby8744":
+            st.warning("يرجى إدخال مفتاح API Key صالح.")
         elif not questions:
             st.warning("لم يتم العثور على أسئلة في ملف الوورد.")
         else:
