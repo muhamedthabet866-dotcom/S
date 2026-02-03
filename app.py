@@ -4,117 +4,93 @@ from docx import Document
 import re
 import io
 
-def final_fixed_spss_engine(doc_upload):
-    doc = Document(io.BytesIO(doc_upload.read()))
-    
-    # 1. تجميع كل النصوص من الملف (فقرات وجداول)
-    all_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if cell.text.strip(): all_lines.append(cell.text.strip())
-    
-    # 2. استخراج خريطة المتغيرات (X1-X6)
+def universal_spss_engine_v17(doc_upload):
+    # قراءة النص من ملف الوورد (دعم ملفات doc و docx)
+    doc_bytes = doc_upload.read()
+    try:
+        doc = Document(io.BytesIO(doc_bytes))
+        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    except:
+        # محاولة قراءة النصوص الخام إذا كان الملف بتنسيق قديم
+        paragraphs = re.findall(r'[ -~]{5,}', doc_bytes.decode('ascii', errors='ignore'))
+
     mapping = {}
-    for line in all_lines:
-        match = re.search(r"(X\d+)\s*=\s*([^(\n\r]+)", line, re.IGNORECASE)
+    for p in paragraphs:
+        match = re.search(r"([Xx]\d+)\s*=\s*([^(\n\r]+)", p, re.IGNORECASE)
         if match:
             v_name = match.group(1).upper()
             v_label = match.group(2).strip()
             mapping[v_name] = v_label
 
-    syntax = ["* --- Final Professional Complete Solution for SPSS v26 --- *.\n"]
-    
-    # تعريف الليبلز والقيم الأساسية
+    syntax = ["* --- Universal Academic Solution (Support for DS 1, 3, 4) --- *.\n"]
     for var, lbl in mapping.items():
         syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
-    syntax.append("VALUE LABELS X4 0 'No' 1 'Yes' /X5 0 'No' 1 'Yes' /X6 1 'City 1' 2 'City 2' 3 'City 3' 4 'City 4'.")
     syntax.append("SET DECIMAL=DOT.\n")
 
-    # 3. معالجة كل سؤال بناءً على محتواه (المنطق المصلح)
-    for q in all_lines:
-        q_low = q.lower()
-        # تخطي أسطر التعريفات (X1=...) حتى لا تتكرر كأجوبة
-        if re.search(r"X\d+\s*=", q): continue
+    for p in paragraphs:
+        p_low = p.lower()
+        if re.search(r"[Xx]\d+\s*=", p): continue
         
-        syntax.append(f"\n* QUESTION: {q}.")
+        # ربط المتغيرات بالأسئلة
+        found_vars = [v for v in mapping.keys() if v in p.upper() or mapping[v].lower()[:10] in p_low]
+        if not found_vars and "normality" not in p_low and "regression" not in p_low: continue
 
-        # السؤال 1: جداول تكرارية للمتغيرات التصنيفية
-        if "frequency table" in q_low and any(word in q_low for word in ["debit", "interest", "city"]):
-            syntax.append("FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.")
+        syntax.append(f"\n* QUESTION: {p}.")
 
-        # السؤال 2 و 3: جداول فئات (Classes / K-rule)
-        elif "classes" in q_low:
-            if "balance" in q_low or "x1" in q_low:
-                syntax.append("RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) (1500.01 thru 2000=4) (2000.01 thru HI=5) INTO X1_Classes.")
-                syntax.append("VARIABLE LABELS X1_Classes 'Account Balance Classes'.")
-                syntax.append("VALUE LABELS X1_Classes 1 '0-500' 2 '501-1000' 3 '1001-1500' 4 '1501-2000' 5 'Over 2000'.")
-                syntax.append("FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.")
-            elif "transaction" in q_low or "x2" in q_low:
-                syntax.append("RECODE X2 (2 thru 5=1) (6 thru 9=2) (10 thru 13=3) (14 thru 17=4) (18 thru 21=5) (22 thru 25=6) INTO X2_Krule.")
-                syntax.append("VARIABLE LABELS X2_Krule 'ATM Transactions (K-Rule)'.")
-                syntax.append("VALUE LABELS X2_Krule 1 '2-5' 2 '6-9' 3 '10-13' 4 '14-17' 5 '18-21' 6 '22-25'.")
-                syntax.append("FREQUENCIES VARIABLES=X2_Krule.")
+        # 1. الانحدار الخطي المتعدد (سؤال متكرر في DS 4)
+        if "regression" in p_low or "y = f(" in p_low:
+            dep_var = "X5" if "happiness" in p_low else found_vars[0] if found_vars else "Y"
+            indep_vars = [v for v in mapping.keys() if v != dep_var]
+            syntax.append(f"REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /NOORIGIN /DEPENDENT {dep_var} /METHOD=ENTER {' '.join(indep_vars)}.")
 
-        # السؤال 4 و 6: الإحصاء الوصفي والالتواء
-        elif any(word in q_low for word in ["mean", "median", "mode", "skewness"]):
-            if "each city" in q_low:
-                syntax.append("SORT CASES BY X6.\nSPLIT FILE SEPARATE BY X6.\nFREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE /FORMAT=NOTABLE.\nSPLIT FILE OFF.")
-            elif "debit card or not" in q_low:
-                syntax.append("SORT CASES BY X4.\nSPLIT FILE SEPARATE BY X4.\nFREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE /FORMAT=NOTABLE.\nSPLIT FILE OFF.")
+        # 2. الارتباط (Correlation)
+        elif "correlation" in p_low:
+            syntax.append(f"CORRELATIONS /VARIABLES={' '.join(found_vars[:2])} /PRINT=TWOTAIL NOSIG /MISSING=PAIRWISE.")
+
+        # 3. اختبارات الفروض (Hypothesis Testing / T-Test)
+        elif "test the hypothesis" in p_low or "significant difference" in p_low:
+            if "different region" in p_low or "different occupation" in p_low:
+                # ANOVA (أكثر من مجموعتين)
+                syntax.append(f"ONEWAY {' '.join(found_vars[:1])} BY {found_vars[-1]} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).")
             else:
-                syntax.append("FREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS SESKEW /FORMAT=NOTABLE.")
+                # Independent T-Test
+                syntax.append(f"T-TEST GROUPS={found_vars[-1]}(1 2) /VARIABLES={found_vars[0]}.")
 
-        # السؤال 5: الهيستوجرام
-        elif "histogram" in q_low:
-            syntax.append("GRAPH /HISTOGRAM=X1 /TITLE='Histogram of Balance'.")
-            syntax.append("GRAPH /HISTOGRAM=X2 /TITLE='Histogram of Transactions'.")
+        # 4. فترات الثقة (95% و 99% - طلب المهندس محمد)
+        elif "confidence interval" in p_low:
+            for val in ["95", "99"]:
+                syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
 
-        # السؤال 9، 10، 11، 12: الرسوم البيانية (Bar Charts)
-        elif "bar chart" in q_low:
-            if "average" in q_low and "city" in q_low:
-                if "customers who have debit card" in q_low:
-                    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4 /TITLE='Avg Balance by City & Card'.")
-                else:
-                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6 /TITLE='Average Balance per City'.")
-            elif "maximum" in q_low:
-                syntax.append("GRAPH /BAR(SIMPLE)=MAX(X2) BY X4 /TITLE='Max Transactions by Card Status'.")
-            elif "percentage" in q_low:
-                syntax.append("GRAPH /BAR(SIMPLE)=PCT BY X5 /TITLE='Percentage of Interest Reception'.")
+        # 5. الرسوم البيانية المتطورة
+        elif "bar chart" in p_low:
+            stat = "MEAN" if "average" in p_low else "MAX" if "maximum" in p_low else "PCT" if "percentage" in p_low else "COUNT"
+            if len(found_vars) >= 2:
+                syntax.append(f"GRAPH /BAR(SIMPLE)={stat}({found_vars[0]}) BY {found_vars[1]}.")
+            else:
+                syntax.append(f"GRAPH /BAR(SIMPLE)={stat} BY {found_vars[0]}.")
 
-        # السؤال 13: Pie Chart
-        elif "pie chart" in q_low:
-            syntax.append("GRAPH /PIE=PCT BY X5 /TITLE='Interest Reception Distribution'.")
+        # 6. التوزيع الطبيعي والقيم الشاذة
+        elif "normality" in p_low:
+            syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
+        elif "outliers" in p_low:
+            syntax.append(f"EXAMINE VARIABLES={found_vars[0]} /PLOT BOXPLOT /STATISTICS DESCRIPTIVES /EXTREME(5).")
 
-        # السؤال 14: فترات الثقة
-        elif "confidence interval" in q_low:
-            syntax.append("EXAMINE VARIABLES = X1 /STATISTICS DESCRIPTIVES /CINTERVAL 95 /PLOT NONE.")
-            syntax.append("EXAMINE VARIABLES = X1 /STATISTICS DESCRIPTIVES /CINTERVAL 99 /PLOT NONE.")
-
-        # السؤال 15: النورمالتي
-        elif "normality" in q_low or "empirical" in q_low:
-            syntax.append("EXAMINE VARIABLES = X1 /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
-
-        # السؤال 16: القيم الشاذة
-        elif "outliers" in q_low:
-            syntax.append("EXAMINE VARIABLES = X1 /STATISTICS DESCRIPTIVES EXTREME(5) /PLOT BOXPLOT.")
+        # 7. التكرارات والوصف العام
+        elif any(w in p_low for w in ["mean", "median", "frequency table"]):
+            syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV SKEWNESS.")
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
 # واجهة Streamlit
-st.set_page_config(page_title="SPSS Master Engine", layout="wide")
-st.title("📊 المحرك الإحصائي الكامل (v26)")
-
-u_excel = st.file_uploader("1. ارفع ملف الإكسيل", type=['xlsx', 'xls'])
-u_word = st.file_uploader("2. ارفع ملف الوورد", type=['docx'])
+st.title("🏆 المحلل الإحصائي الشامل (DS 1, 3, 4)")
+u_excel = st.file_uploader("ارفع ملف الإكسيل (Data set 3 or 4)", type=['xlsx', 'xls'])
+u_word = st.file_uploader("ارفع ملف الوورد الخاص بالنموذج", type=['doc', 'docx'])
 
 if u_excel and u_word:
     try:
-        df = pd.read_excel(u_excel)
-        st.success("✅ تم استلام الملفات وتحليل كافة الأسئلة بنجاح.")
-        final_code = final_fixed_spss_engine(u_word)
+        final_code = universal_spss_engine_v17(u_word)
         st.code(final_code, language='spss')
-        st.download_button("تحميل السينتاكس الكامل (.sps)", final_code, "SPSS_Full_Solution.sps")
+        st.download_button("تحميل السينتاكس (.sps)", final_code, "Full_Analysis.sps")
     except Exception as e:
         st.error(f"Error: {e}")
