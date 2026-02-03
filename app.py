@@ -4,89 +4,95 @@ from docx import Document
 import re
 import io
 
-def master_spss_engine_v6(doc_upload):
-    # قراءة ملف الوورد بالكامل (الفقرات والجداول)
+def master_spss_engine_final_v7(doc_upload):
     doc = Document(io.BytesIO(doc_upload.read()))
-    all_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    
+    # جمع النصوص من كل مكان في الوورد
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                if cell.text.strip(): all_text.append(cell.text.strip())
-
+                if cell.text.strip(): paragraphs.append(cell.text.strip())
+    
     mapping = {}
-    syntax = ["* --- Professional Corrected Syntax for SPSS v26 --- *.\n"]
-
-    # 1. استخراج التعريفات (X1, X2...)
-    for line in all_lines:
-        match = re.search(r"(X\d+)\s*=\s*([^(\n\r]+)", line, re.IGNORECASE)
+    for p in paragraphs:
+        match = re.search(r"(X\d+)\s*=\s*([^(\n\r]+)", p, re.IGNORECASE)
         if match:
             v_name = match.group(1).upper()
-            v_label = match.group(2).strip()
+            v_label = match.group(2).strip().lower()
             mapping[v_name] = v_label
-            syntax.append(f"VARIABLE LABELS {v_name} '{v_label}'.")
+
+    syntax = ["* --- Final Professional Solution for SPSS v26 --- *.\n"]
+    for var, lbl in mapping.items():
+        syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
 
     syntax.append("\nSET DECIMAL=DOT.\n")
 
-    # 2. تحليل الأسئلة وترجمتها لأوامر (تصحيح خطأ 701)
-    for line in all_lines:
-        line_low = line.lower()
-        if re.search(r"X\d+\s*=", line): continue # تخطي أسطر التعريف
-
-        # تحديد المتغيرات المرتبطة بالسؤال
-        target_vars = []
-        for v_code, v_label in mapping.items():
-            if v_code.lower() in line_low or v_label.lower()[:12] in line_low:
-                target_vars.append(v_code)
+    for p in paragraphs:
+        p_low = p.lower()
+        if re.search(r"X\d+\s*=", p): continue
         
-        # كلمات مفتاحية احتياطية (لحالات الأسئلة النصية فقط)
-        if not target_vars:
-            if "balance" in line_low: target_vars.append("X1")
-            if "transaction" in line_low or "atm" in line_low: target_vars.append("X2")
-            if "city" in line_low: target_vars.append("X6")
+        # ربط المتغيرات (البحث عن الرمز أو الاسم النصي)
+        found_vars = []
+        for v_code, v_label in mapping.items():
+            if v_code.lower() in p_low or v_label[:15] in p_low:
+                found_vars.append(v_code)
+        
+        # دعم يدوي للأسئلة التي لا تحتوي على رموز صريحة
+        if "balance" in p_low and "X1" not in found_vars: found_vars.append("X1")
+        if "city" in p_low and "X6" not in found_vars: found_vars.append("X6")
+        if "transaction" in p_low and "X2" not in found_vars: found_vars.append("X2")
+        if "debit" in p_low and "X4" not in found_vars: found_vars.append("X4")
 
-        if not target_vars: continue
+        if not found_vars: continue
+        syntax.append(f"\n* QUESTION: {p}.")
 
-        syntax.append(f"\n* QUESTION: {line}.")
-
-        # أ. تصحيح أوامر الرسم البياني (تجنب اعتبار MEAN كمتغير)
-        if "bar chart" in line_low:
-            if "average" in line_low or "mean" in line_low:
-                if len(target_vars) >= 2:
-                    # الصيغة الصحيحة التي لا تسبب خطأ 701
-                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({target_vars[0]}) BY {target_vars[1]}.")
+        # 1. الرسوم البيانية (تصحيح الخطأ 701 و 17807)
+        if "bar chart" in p_low:
+            if "average" in p_low or "mean" in p_low:
+                if len(found_vars) >= 2:
+                    # الصيغة الصحيحة: MEAN(X1) BY X6
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({found_vars[0]}) BY {found_vars[1]}.")
                 else:
-                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN BY {target_vars[0]}.")
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({found_vars[0]}).")
+            elif "maximum" in p_low:
+                if len(found_vars) >= 2:
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=MAX({found_vars[0]}) BY {found_vars[1]}.")
+            elif "percentage" in p_low:
+                syntax.append(f"GRAPH /BAR(SIMPLE)=PCT BY {found_vars[0]}.")
             else:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {target_vars[0]}.")
+                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0]}.")
 
-        # ب. فترات الثقة (فصل 95% و 99% في جداول مستقلة)
-        elif "confidence interval" in line_low:
-            for pct in ["95", "99"]:
-                syntax.append(f"EXAMINE VARIABLES={' '.join(target_vars)} /PLOT NONE /STATISTICS DESCRIPTIVES /CINTERVAL {pct}.")
+        # 2. فترات الثقة (95% و 99% في جداول مستقلة)
+        elif "confidence interval" in p_low:
+            for val in ["95", "99"]:
+                syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /PLOT NONE /STATISTICS DESCRIPTIVES /CINTERVAL {val}.")
 
-        # ج. الإحصاء الوصفي (Mean, Median, etc.)
-        elif any(w in line_low for w in ["mean", "median", "calculate", "mode"]):
-            syntax.append(f"FREQUENCIES VARIABLES={' '.join(target_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE.")
+        # 3. الإحصاء الوصفي والتكرارات
+        elif any(w in p_low for w in ["mean", "median", "calculate", "mode", "deviation"]):
+            syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE.")
+        
+        elif "frequency table" in p_low:
+            syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars)} /ORDER=ANALYSIS.")
 
-        # د. الهيستوجرام
-        elif "histogram" in line_low:
-            for v in target_vars:
-                syntax.append(f"GRAPH /HISTOGRAM={v}.")
+        # 4. الهيستوجرام
+        elif "histogram" in p_low:
+            for v in found_vars: syntax.append(f"GRAPH /HISTOGRAM={v}.")
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
 # واجهة Streamlit
-st.title("📊 المحلل الإحصائي المطور (Fixing Error 701)")
-u_excel = st.file_uploader("ارفع ملف الإكسيل", type=['xlsx', 'xls'])
-u_word = st.file_uploader("ارفع ملف الوورد (.docx)", type=['docx'])
+st.title("🧙‍♂️ SPSS Master Pro (v26 Corrected)")
+u_excel = st.file_uploader("Excel File", type=['xlsx', 'xls'])
+u_word = st.file_uploader("Word File (.docx)", type=['docx'])
 
 if u_excel and u_word:
     try:
         df = pd.read_excel(u_excel)
-        final_syntax = master_spss_engine_v6(u_word)
-        st.success("✅ تم تصحيح الأوامر وتوليد السينتاكس!")
-        st.code(final_syntax, language='spss')
-        st.download_button("تحميل الملف .sps", final_syntax, "SPSS_Final_Fix.sps")
+        final_code = master_spss_engine_final_v7(u_word)
+        st.success("تم توليد الكود وتصحيح أخطاء الرسم البياني وفصل فترات الثقة!")
+        st.code(final_code, language='spss')
+        st.download_button("تحميل الملف .sps", final_code, "Final_Solution_v26.sps")
     except Exception as e:
-        st.error(f"حدث خطأ: {e}")
+        st.error(f"Error: {e}")
