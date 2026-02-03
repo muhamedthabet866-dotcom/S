@@ -4,7 +4,7 @@ from docx import Document
 import re
 import io
 
-def universal_master_engine_v27(doc_upload):
+def universal_master_engine_v28(doc_upload):
     doc_bytes = doc_upload.read()
     try:
         doc = Document(io.BytesIO(doc_bytes))
@@ -20,7 +20,7 @@ def universal_master_engine_v27(doc_upload):
             v_label = match.group(2).strip()
             mapping[v_name] = v_label
 
-    syntax = ["* --- Final Scientific Universal Solution (Fixed v27) --- *.\n"]
+    syntax = ["* --- Final Professional Universal Solution (Fixed v28) --- *.\n"]
     for var, lbl in mapping.items():
         syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
     
@@ -42,16 +42,19 @@ def universal_master_engine_v27(doc_upload):
         if not found_vars and "normality" not in p_low: continue
         syntax.append(f"\n* QUESTION: {p}.")
 
-        # 1. التكرارات والـ Classes (السؤال 1، 2، 3)
+        # 1. التكرارات والتقسيم الذكي للفئات
         if "frequency table" in p_low:
-            if "classes" in p_low or "k rule" in p_low:
-                target = "X1" if "balance" in p_low else "X2" if "transaction" in p_low else found_vars[0]
-                syntax.append(f"RECODE {target} (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) (1500.01 thru HI=4) INTO {target}_CL.")
-                syntax.append(f"FREQUENCIES VARIABLES={target}_CL /ORDER=ANALYSIS.")
+            if "balance" in p_low or "x1" in p_low:
+                syntax.append("RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) (1500.01 thru HI=4) INTO X1_CL.")
+                syntax.append("FREQUENCIES VARIABLES=X1_CL /ORDER=ANALYSIS.")
+            elif "transaction" in p_low or "x2" in p_low:
+                # تقسيم منطقي لعدد العمليات (2-25)
+                syntax.append("RECODE X2 (0 thru 5=1) (5.01 thru 10=2) (10.01 thru 15=3) (15.01 thru HI=4) INTO X2_CL.")
+                syntax.append("FREQUENCIES VARIABLES=X2_CL /ORDER=ANALYSIS.")
             else:
                 syntax.append(f"FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.")
 
-        # 2. الإحصاء الوصفي والتحليل المقارن (السؤال 4، 7، 8)
+        # 2. الإحصاء الوصفي والتحليل المقارن (Split File)
         elif any(w in p_low for w in ["mean", "median", "calculate", "each city", "debit card or not"]):
             if "each city" in p_low and "bar chart" not in p_low:
                 syntax.append("SORT CASES BY X6.\nSPLIT FILE SEPARATE BY X6.\nFREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE.\nSPLIT FILE OFF.")
@@ -60,13 +63,13 @@ def universal_master_engine_v27(doc_upload):
             else:
                 syntax.append(f"FREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE STDDEV SKEWNESS SESKEW /FORMAT=NOTABLE.")
 
-        # 3. الرسوم البيانية (تصحيح الأوامر لمنع الجداول)
+        # 3. الرسوم البيانية (تصحيح الأوامر لمنع الجداول بدلاً من الرسوم)
         elif "bar chart" in p_low:
             if "average" in p_low or "mean" in p_low:
-                if "debit card" in p_low and "each city" in p_low:
-                    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4.")
-                else:
-                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
+                if "debit card" in p_low: # الرسم المجمع الاحترافي
+                    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4 /TITLE='Avg Balance by City and Card'.")
+                else: # الرسم البسيط
+                    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6 /TITLE='Avg Balance per City'.")
             elif "maximum" in p_low:
                 syntax.append("GRAPH /BAR(SIMPLE)=MAX(X2) BY X4.")
             else:
@@ -75,12 +78,12 @@ def universal_master_engine_v27(doc_upload):
         elif "pie chart" in p_low:
             syntax.append("GRAPH /PIE=COUNT BY X5.")
 
-        # 4. فترات الثقة (فصل الجداول - السؤال 14)
+        # 4. فترات الثقة (فصل الجداول بناءً على طلبك)
         elif "confidence interval" in p_low:
             for val in ["95", "99"]:
                 syntax.append(f"EXAMINE VARIABLES=X1 /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
 
-        # 5. النورمالتي والقيم الشاذة (السؤال 15، 16)
+        # 5. النورمالتي والقيم الشاذة
         elif "normality" in p_low:
             syntax.append("EXAMINE VARIABLES=X1 /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
         elif "outliers" in p_low:
@@ -92,14 +95,14 @@ def universal_master_engine_v27(doc_upload):
     return "\n".join(syntax)
 
 # واجهة Streamlit
-st.title("📊 المحلل الإحصائي المطور (إصدار v27 النهائي)")
+st.title("📊 المحلل الإحصائي المطور (إصدار v28 النهائي)")
 u_excel = st.file_uploader("1. ارفع ملف الإكسيل", type=['xlsx', 'xls', 'csv'])
 u_word = st.file_uploader("2. ارفع ملف الوورد (الأسئلة)", type=['docx', 'doc'])
 
 if u_excel and u_word:
     try:
-        final_syntax = universal_master_engine_v27(u_word)
+        final_syntax = universal_master_engine_v28(u_word)
         st.code(final_syntax, language='spss')
-        st.download_button("تحميل السينتاكس النهائي (.sps)", final_syntax, "Final_Solution_v27.sps")
+        st.download_button("تحميل السينتاكس النهائي (.sps)", final_syntax, "Final_Solution_v28.sps")
     except Exception as e:
         st.error(f"Error: {e}")
