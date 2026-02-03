@@ -3,97 +3,100 @@ import pandas as pd
 from docx import Document
 import re
 
-# دالة ذكية لاستخراج خريطة المتغيرات والأسئلة
-def analyze_spss_document(doc_file):
+def smart_analysis(doc_file, df_columns):
     doc = Document(doc_file)
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    paragraphs = [p.text.strip() for p in doc.paragraphs if len(p.text.strip()) > 5]
     
     mapping = {}
-    questions = []
-    
-    # 1. فصل التعريفات (Where) عن أسئلة التحليل
+    # 1. استخراج التعريفات (الخريطة)
     for p in paragraphs:
-        # البحث عن التعريفات مثل X1 = ...
         match = re.search(r"(X\d+)\s*=\s*([^(\n]+)", p, re.IGNORECASE)
         if match:
             var_name = match.group(1).upper()
-            var_label = match.group(2).strip()
-            # استخراج القيم (Value Labels) إن وجدت مثل (1=yes)
-            values = re.findall(r"(\d+)\s*=\s*([a-zA-Zأ-ي]+)", p)
-            mapping[var_name] = {"label": var_label, "values": values}
-        else:
-            # أي سطر آخر يحتوي على كلمات تحليلية نعتبره سؤالاً
-            if any(word in p.lower() for word in ['construct', 'calculate', 'draw', 'test', 'mean', 'chart']):
-                questions.append(p)
-                
-    return mapping, questions
+            label_text = match.group(2).strip().lower()
+            mapping[var_name] = label_text
 
-def generate_scientific_syntax(mapping, questions, excel_cols):
-    syntax = ["* SPSS Syntax Generated for SPSS v26 - Professional Analysis.\n"]
+    syntax = ["* --- Comprehensive Scientific Analysis for SPSS v26 --- *.\n"]
     
-    # تعريف المتغيرات أولاً (Variable & Value Labels)
-    for var, info in mapping.items():
-        if var in [c.upper() for c in excel_cols]:
-            syntax.append(f"VARIABLE LABELS {var} '{info['label']}'.")
-            if info['values']:
-                syntax.append(f"VALUE LABELS {var}")
-                for val, lab in info['values']:
-                    syntax.append(f"  {val} '{lab}'")
-                syntax.append(".")
+    # 2. توليد Variable Labels
+    for var, lbl in mapping.items():
+        syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
 
-    syntax.append("\n* --- Start of Scientific Analysis ---.\n")
-
-    # تحليل كل سؤال وتوليد الكود المقابل له
-    for q in questions:
-        q_low = q.lower()
-        # تحديد المتغيرات المذكورة في السؤال
-        found_vars = [v for v in mapping.keys() if v in q.upper() or mapping[v]['label'].lower() in q_low]
-        if not found_vars: found_vars = [v for v in mapping.keys() if v in q.upper()]
-
-        # أ. الجداول التكرارية
-        if "frequency table" in q_low:
-            syntax.append(f"* {q}.\nFREQUENCIES VARIABLES={' '.join(found_vars)} /ORDER=ANALYSIS.")
+    # 3. تحليل كل سطر في الوورد لتحويله إلى أمر إحصائي
+    for p in paragraphs:
+        p_low = p.lower()
         
-        # ب. الإحصاء الوصفي (Mean, Median, etc.)
-        elif any(word in q_low for word in ["mean", "median", "mode", "calculate"]):
-            syntax.append(f"* {q}.\nDESCRIPTIVES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN STDDEV MIN MAX KURTOSIS SKEWNESS.")
-
-        # ج. الرسوم البيانية
-        elif "histogram" in q_low:
-            for v in found_vars:
-                syntax.append(f"GRAPH /HISTOGRAM={v} /TITLE='Histogram of {v}'.")
+        # البحث عن المتغيرات المذكورة في هذا السطر (سواء بالرمز X1 أو بالاسم النصي)
+        vars_in_q = []
+        for var_code, var_label in mapping.items():
+            # إذا ذكر رمز المتغير (X1) أو جزء كبير من وصفه (Account Balance)
+            if var_code.lower() in p_low or (len(var_label) > 3 and var_label[:15] in p_low):
+                vars_in_q.append(var_code)
         
-        elif "bar chart" in q_low:
-            if len(found_vars) >= 2:
-                syntax.append(f"GRAPH /BAR(MEAN)={found_vars[0]} BY {found_vars[1]}.")
+        # --- منطق توليد الأوامر ---
+        
+        # أ. الجداول التكرارية (Frequency)
+        if "frequency table" in p_low or "categorical" in p_low:
+            if vars_in_q:
+                syntax.append(f"* {p}.\nFREQUENCIES VARIABLES={' '.join(vars_in_q)} /ORDER=ANALYSIS.")
+
+        # ب. الرسوم البيانية (Charts)
+        elif "histogram" in p_low:
+            for v in vars_in_q:
+                syntax.append(f"* {p}.\nGRAPH /HISTOGRAM={v} /TITLE='Histogram of {v}'.")
+
+        elif "bar chart" in p_low:
+            if "average" in p_low or "mean" in p_low:
+                # إذا كان هناك متغيرين (مثلاً: Average Salary by City)
+                if len(vars_in_q) >= 2:
+                    syntax.append(f"* {p}.\nGRAPH /BAR(MEAN)={vars_in_q[0]} BY {vars_in_q[1]}.")
+                elif vars_in_q:
+                    syntax.append(f"* {p}.\nGRAPH /BAR(MEAN) BY {vars_in_q[0]}.")
             else:
-                syntax.append(f"GRAPH /BAR(COUNT) BY {' '.join(found_vars)}.")
+                for v in vars_in_q:
+                    syntax.append(f"* {p}.\nGRAPH /BAR(COUNT) BY {v}.")
 
-        # د. اختبارات الفرضيات (T-Test)
-        elif "test the hypothesis" in q_low or "difference" in q_low:
-            if len(found_vars) >= 2:
-                syntax.append(f"T-TEST GROUPS={found_vars[1]}(0 1) /VARIABLES={found_vars[0]}.")
+        elif "pie chart" in p_low:
+            if vars_in_q:
+                syntax.append(f"* {p}.\nGRAPH /PIE={vars_in_q[0]}.")
+
+        # ج. الإحصاء الوصفي (Calculate mean, median, etc.)
+        elif any(word in p_low for word in ["mean", "median", "mode", "calculate", "standard deviation"]):
+            if vars_in_q:
+                syntax.append(f"* {p}.\nFREQUENCIES VARIABLES={' '.join(vars_in_q)} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE.")
+
+        # د. اختبارات الفرضيات (Hypothesis Testing)
+        elif "test the hypothesis" in p_low or "significance" in p_low:
+            if len(vars_in_q) >= 2:
+                # T-test لمجموعتين
+                syntax.append(f"* {p}.\nT-TEST GROUPS={vars_in_q[1]}(0 1) /VARIABLES={vars_in_q[0]}.")
+            elif "equal" in p_low or "less than" in p_low:
+                # One Sample T-test
+                val = re.findall(r'\d+', p)
+                test_val = val[0] if val else "0"
+                syntax.append(f"* {p}.\nT-TEST /TESTVAL={test_val} /VARIABLES={vars_in_q[0]}.")
+
+        # هـ. فترات الثقة (Confidence Interval)
+        elif "confidence interval" in p_low:
+            if vars_in_q:
+                syntax.append(f"* {p}.\nEXAMINE VARIABLES={' '.join(vars_in_q)} /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
-# واجهة تطبيق Streamlit
-st.set_page_config(page_title="SPSS Scientific Generator", layout="wide")
-st.title("🔬 المولد العلمي لسينتاكس SPSS v26")
+# واجهة المستخدم
+st.set_page_config(page_title="SPSS Master Generator", layout="wide")
+st.title("🧙‍♂️ المولد الذكي لتحليل SPSS v26")
+st.markdown("يرجى التأكد من رفع ملفات **.docx** (وليس .doc القديم) لضمان دقة القراءة.")
 
-up_excel = st.file_uploader("1. ارفع ملف الإكسيل", type=['xlsx', 'xls'])
-up_word = st.file_uploader("2. ارفع ملف الوورد (docx فقط)", type=['docx'])
+c1, c2 = st.columns(2)
+with c1: up_excel = st.file_uploader("ملف البيانات (Excel)", type=['xlsx', 'xls'])
+with c2: up_word = st.file_uploader("ملف الأسئلة (Word .docx)", type=['docx'])
 
 if up_excel and up_word:
     df = pd.read_excel(up_excel)
-    mapping, questions = analyze_spss_document(up_word)
+    final_syntax = smart_analysis(up_word, df.columns)
     
-    if mapping:
-        st.success(f"تم اكتشاف {len(mapping)} متغيرات و {len(questions)} طلبات تحليل.")
-        final_syntax = generate_scientific_syntax(mapping, questions, df.columns)
-        
-        st.subheader("السينتاكس العلمي الناتج:")
-        st.code(final_syntax, language='spss')
-        st.download_button("تحميل الملف جاهزاً للتشغيل على SPSS v26", final_syntax, "analysis_v26.sps")
-    else:
-        st.warning("لم يتم العثور على تعريفات للمتغيرات (X1, X2...) في ملف الوورد.")
+    st.success("✅ تم تحليل الأسئلة وتوليد أوامر الرسم والتحليل!")
+    st.code(final_syntax, language='spss')
+    st.download_button("تحميل السينتاكس العلمي الكامل (.sps)", final_syntax, "SPSS_Full_Analysis.sps")
