@@ -4,14 +4,13 @@ from docx import Document
 import re
 import io
 
-# دالة المعالجة النهائية v26
+# دالة المعالجة النهائية v26 لإصلاح الرسوم البيانية وفصل فترات الثقة
 def universal_master_engine_v26(doc_upload):
     doc_bytes = doc_upload.read()
     try:
         doc = Document(io.BytesIO(doc_bytes))
         paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     except:
-        # دعم الملفات القديمة doc
         paragraphs = re.findall(r'[ -~]{5,}', doc_bytes.decode('ascii', errors='ignore'))
 
     mapping = {}
@@ -44,7 +43,7 @@ def universal_master_engine_v26(doc_upload):
         if not found_vars and "normality" not in p_low: continue
         syntax.append(f"\n* QUESTION: {p}.")
 
-        # 1. التكرارات والـ Classes (حل مشكلة الجداول الطويلة)
+        # 1. التكرارات والـ Classes
         if "frequency table" in p_low:
             if "balance" in p_low or "x1" in p_low:
                 syntax.append("RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) (1500.01 thru HI=4) INTO X1_CL.")
@@ -64,12 +63,12 @@ def universal_master_engine_v26(doc_upload):
             else:
                 syntax.append(f"FREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE STDDEV SKEWNESS SESKEW /FORMAT=NOTABLE.")
 
-        # 3. الرسوم البيانية (تصحيح الأوامر لمنع الجداول بدلاً من الرسوم)
+        # 3. الرسوم البيانية (تصحيح الأوامر لمنع استبدال الرسم بالجدول)
         elif "bar chart" in p_low:
             if "average" in p_low or "mean" in p_low:
-                if "debit card" in p_low: # الرسم المجمع المطلوب (DS 1 - Q11)
+                if "debit card" in p_low: # الرسم المجمع المطلوب (Grouped Bar Chart)
                     syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4.")
-                else: # الرسم البسيط لكل مدينة (DS 1 - Q9)
+                else: # الرسم البسيط لكل مدينة (Simple Bar Chart)
                     syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
             elif "maximum" in p_low:
                 syntax.append("GRAPH /BAR(SIMPLE)=MAX(X2) BY X4.")
@@ -79,12 +78,12 @@ def universal_master_engine_v26(doc_upload):
         elif "pie chart" in p_low:
             syntax.append("GRAPH /PIE=COUNT BY X5.")
 
-        # 4. فترات الثقة (95% و 99% - طلبك الأساسي)
+        # 4. فترات الثقة (فصل الجداول بناءً على طلبك)
         elif "confidence interval" in p_low:
             for val in ["95", "99"]:
                 syntax.append(f"EXAMINE VARIABLES=X1 /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
 
-        # 5. النورمالتي والقيم الشاذة
+        # 5. النورمالتي والقيم الشاذة والهيستوجرام
         elif "normality" in p_low:
             syntax.append("EXAMINE VARIABLES=X1 /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
         elif "outliers" in p_low:
