@@ -3,14 +3,13 @@ import pandas as pd
 from docx import Document
 import re
 
-def master_spss_engine(doc_file, df_cols):
+def master_spss_engine_v3(doc_file):
     doc = Document(doc_file)
-    paragraphs = [p.text.strip() for p in doc.paragraphs if len(p.text.strip()) > 5]
+    paragraphs = [p.text.strip() for p in doc.paragraphs if len(p.text.strip()) > 3]
     
     # 1. بناء القاموس الذكي للمتغيرات (Mapping)
     mapping = {}
     for p in paragraphs:
-        # البحث عن نمط X1 = Label
         match = re.search(r"(X\d+)\s*=\s*([^(\n\r]+)", p, re.IGNORECASE)
         if match:
             v_name = match.group(1).upper()
@@ -19,7 +18,7 @@ def master_spss_engine(doc_file, df_cols):
             vals = re.findall(r"(\d+)\s*=\s*([a-zA-Zأ-ي]+)", p)
             mapping[v_name] = {"label": v_label, "values": vals}
 
-    syntax = ["* --- Final Scientific Syntax for SPSS v26 (Fixing Error 17807) --- *.\n"]
+    syntax = ["* --- Final Scientific Syntax (Optimized for SPSS v26) --- *.\n"]
     
     # تعريف التسميات (Labels)
     for var, info in mapping.items():
@@ -34,10 +33,9 @@ def master_spss_engine(doc_file, df_cols):
     # 2. تحليل الأسئلة وترجمتها لأوامر احترافية
     for p in paragraphs:
         p_low = p.lower()
-        # تخطي أسطر التعريفات
-        if re.search(r"X\d+\s*=", p): continue
+        if re.search(r"X\d+\s*=", p): continue # تخطي أسطر التعريف
         
-        # البحث عن المتغيرات المذكورة في السؤال (بالرمز أو بالاسم)
+        # البحث عن المتغيرات المذكورة
         found_vars = []
         for v_code, v_info in mapping.items():
             clean_label = v_info['label'].lower()
@@ -45,10 +43,9 @@ def master_spss_engine(doc_file, df_cols):
                 found_vars.append(v_code)
         
         if not found_vars: continue
-
         syntax.append(f"\n* QUESTION: {p}.")
-        
-        # --- منطق الأوامر المتوافق مع v26 ---
+
+        # --- منطق الأوامر المتوافق علمياً ---
 
         # أ. الجداول التكرارية
         if "frequency table" in p_low:
@@ -56,9 +53,8 @@ def master_spss_engine(doc_file, df_cols):
 
         # ب. الإحصاء الوصفي (Mean, Std Dev, etc.)
         elif any(w in p_low for w in ["mean", "median", "calculate", "descriptive"]):
-            # التحقق من وجود "for each" (طلب تقسيم البيانات)
             if "for each" in p_low or "per" in p_low:
-                split_var = found_vars[-1] # عادة آخر متغير هو المتغير التصنيفي (مثل المدينة)
+                split_var = found_vars[-1]
                 analysis_vars = [v for v in found_vars if v != split_var]
                 syntax.append(f"SORT CASES BY {split_var}.\nSPLIT FILE LAYERED BY {split_var}.")
                 syntax.append(f"DESCRIPTIVES VARIABLES={' '.join(analysis_vars)} /STATISTICS=MEAN STDDEV MIN MAX SKEWNESS.")
@@ -66,45 +62,56 @@ def master_spss_engine(doc_file, df_cols):
             else:
                 syntax.append(f"DESCRIPTIVES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN STDDEV MIN MAX SKEWNESS.")
 
-        # ج. الرسوم البيانية (التصحيح النهائي لخطأ 17807)
+        # ج. الرسوم البيانية (حل نهائي لخطأ 17807)
         elif "histogram" in p_low:
             for v in found_vars: syntax.append(f"GRAPH /HISTOGRAM={v}.")
 
         elif "bar chart" in p_low:
-            if "average" in p_low or "mean" in p_low:
-                if len(found_vars) >= 3: # طلب Clustered Bar (بناءً على متغيرين)
-                    syntax.append(f"GRAPH /BAR(GROUPED)=MEAN({found_vars[0]}) BY {found_vars[1]} BY {found_vars[2]}.")
-                elif len(found_vars) == 2: # Bar بسيط بمتوسط
-                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({found_vars[0]}) BY {found_vars[1]}.")
-            elif "percentage" in p_low:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=PCT BY {found_vars[0]}.")
+            if "average" in p_low or "mean" in p_low or "maximum" in p_low:
+                stat = "MEAN" if "average" in p_low or "mean" in p_low else "MAX"
+                if len(found_vars) >= 2:
+                    syntax.append(f"GRAPH /BAR(SIMPLE)={stat}({found_vars[0]}) BY {found_vars[1]}.")
+                else:
+                    syntax.append(f"GRAPH /BAR(SIMPLE)={stat} BY {found_vars[0]}.")
             else:
                 syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0]}.")
 
-        elif "pie chart" in p_low:
-            syntax.append(f"GRAPH /PIE=COUNT BY {found_vars[0]}.")
-
-        # د. اختبارات الفرضيات و فترات الثقة
+        # د. فترات الثقة (الحل المنفصل 95% و 99%)
         elif "confidence interval" in p_low:
-            syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /PLOT NONE /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
+            intervals = re.findall(r"(\d+)%", p_low)
+            if not intervals: intervals = ["95"] # الافتراضي إذا لم يحدد
+            for interval in intervals:
+                syntax.append(f"* Confidence Interval {interval}% Calculation.")
+                syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /PLOT NONE /STATISTICS DESCRIPTIVES /CINTERVAL {interval}.")
 
+        # هـ. اختبارات النورمالتي (Normality/P-P/Q-Q)
+        elif "normality" in p_low:
+            syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars)} /PLOT NPPLOT /STATISTICS NONE.")
+
+        # و. اختبارات الفرضيات (T-Test)
         elif "test" in p_low and "hypothesis" in p_low:
             if len(found_vars) >= 2:
                 syntax.append(f"T-TEST GROUPS={found_vars[1]}(0 1) /VARIABLES={found_vars[0]}.")
+            else:
+                # One sample t-test
+                val = re.findall(r'\d+', p)
+                test_val = val[0] if val else "0"
+                syntax.append(f"T-TEST /TESTVAL={test_val} /VARIABLES={found_vars[0]}.")
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
 # واجهة المستخدم
-st.set_page_config(page_title="SPSS Master", layout="wide")
-st.title("🏆 المولد الإحصائي الذكي (v26 Professional)")
+st.set_page_config(page_title="SPSS Pro", layout="wide")
+st.title("🏆 المحلل الذكي: Excel to SPSS v26")
+st.markdown("تم تحديث النظام ليدعم فترات الثقة المنفصلة وتصحيح أوامر الرسم البياني.")
 
 u_excel = st.file_uploader("ارفع ملف الإكسيل", type=['xlsx', 'xls'])
 u_word = st.file_uploader("ارفع ملف الوورد (.docx)", type=['docx'])
 
 if u_excel and u_word:
     df = pd.read_excel(u_excel)
-    syntax_result = master_spss_engine(u_word, df.columns)
-    st.success("تم تحليل الأسئلة علمياً وتصحيح أوامر الرسم البياني!")
+    syntax_result = master_spss_engine_v3(up_word)
+    st.success("تم توليد السينتاكس بنجاح!")
     st.code(syntax_result, language='spss')
-    st.download_button("تحميل السينتاكس النهائي", syntax_result, "SPSS_Final_Ready.sps")
+    st.download_button("تحميل الملف النهائي", syntax_result, "SPSS_Final_Solution.sps")
