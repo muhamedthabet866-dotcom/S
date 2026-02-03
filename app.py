@@ -4,8 +4,8 @@ from docx import Document
 import re
 import io
 
-# 1. دالة استخراج المحتوى من الوورد (الأسئلة والتعريفات) مع دعم الجداول
-def extract_word_data(doc_upload):
+# 1. دالة استخراج المتغيرات والأسئلة بشكل ديناميكي
+def extract_universal_data(doc_upload):
     try:
         doc = Document(io.BytesIO(doc_upload.read()))
         doc_upload.seek(0)
@@ -19,43 +19,43 @@ def extract_word_data(doc_upload):
         
         full_content = "\n".join(full_text_list)
         mapping = {}
-        # البحث عن التعريفات (x1 = label)
+        # البحث عن x1 = label في أي ملف
         matches = re.findall(r"(x\d+)\s*[=:]\s*([^(\n\r\t.]+)", full_content, re.IGNORECASE)
         for var, label in matches:
             mapping[var.lower().strip()] = label.strip()
             
         return mapping, full_text_list
-    except Exception as e:
+    except:
         return {}, []
 
-# 2. المحرك الإحصائي الذكي (Smart Universal Engine)
-def generate_universal_syntax(paragraphs, var_map, excel_columns):
-    # خريطة لربط الكلمات المفتاحية بالمتغيرات لضمان الدقة عبر جميع الملفات
-    smart_vars = {
+# 2. محرك التوليد العالمي (Universal SPSS Engine)
+def generate_universal_syntax(paragraphs, var_map):
+    # خريطة ذكية لربط الكلمات بالرموز بناءً على المنهج
+    logic_map = {
         "salary": "x3", "age": "x9", "children": "x8", "gender": "x1",
-        "race": "x2", "region": "x4", "happiness": "x5", "wins": "x7",
-        "attendance": "x6", "area": "x3", "population": "x4", "balance": "x1"
+        "race": "x2", "region": "x4", "wins": "x7", "area": "x3", 
+        "population": "x4", "league": "x2", "surface": "x11", "g7": "x2"
     }
 
     syntax = [
         "* Encoding: UTF-8.",
         "* =========================================================================.",
-        "* MBA STATISTICAL ANALYSIS REPORT - UNIVERSAL PROFESSIONAL SYNTAX",
+        "* UNIVERSAL MBA STATISTICAL ANALYSIS - SPSS SYNTAX v3",
         "* Prepared for: Dr. Mohamed A. Salam",
         "* =========================================================================.\n",
-        "* --- [Step 1: Variable and Value Labeling] --- .",
-        "* Scientific Justification: Labels ensure the output is professionally readable."
+        "* --- [Step 1: Setup Labels] --- ."
     ]
 
-    # إضافة Variable Labels المستخرجة ديناميكياً
+    # إضافة التسميات المستخرجة من الوورد
     if var_map:
         syntax.append("VARIABLE LABELS")
         labels = [f"  {v} \"{l}\"" for v, l in var_map.items()]
         syntax.append(" /\n".join(labels) + ".")
     
-    # إضافة Value Labels الشاملة (تغطي المجموعات في كل الملفات)
-    syntax.append("\nVALUE LABELS x1 1 \"Male / National\" 2 \"Female / American\" /x2 1 \"White\" 2 \"Black\" 3 \"Others\"")
-    syntax.append("  /x4 1 \"North East / Yes\" 2 \"South East / No\" 3 \"West\" /x5 1 \"Very Happy\" 2 \"Pretty Happy\" 3 \"Not Too Happy\".\nEXECUTE.\n")
+    # تعريف القيم الافتراضية (تغطي معظم الحالات في ملفاتك)
+    syntax.append("\nVALUE LABELS x1 1 \"Male / National / Natural\" 2 \"Female / American / Artificial\"")
+    syntax.append("  /x2 1 \"White / Member\" 2 \"Black / Non-Member\" 3 \"Others\"")
+    syntax.append("  /x4 1 \"North East / Yes\" 2 \"South East / No\" 3 \"West\" /x11 1 \"Far East\" 2 \"Europe\" 3 \"North America\".\nEXECUTE.\n")
 
     q_idx = 1
     for p in paragraphs:
@@ -65,60 +65,50 @@ def generate_universal_syntax(paragraphs, var_map, excel_columns):
 
         syntax.append(f"* --- [Q{q_idx}] {p[:85]}... --- .")
 
-        # --- ذكاء الربط والاختبارات ---
+        # --- ذكاء تحليل السؤال ---
         
-        # 1. التكرارات وإعادة الترميز (Chapter 2)
+        # 1. التكرارات والوصف (Chapter 2)
         if "frequency table" in p_low:
-            if "categorical" in p_low or any(v in p_low for v in ["gender", "race", "region", "card", "interest"]):
-                syntax.append("* Scientific Justification: Summarizing categorical distributions.")
-                syntax.append("FREQUENCIES VARIABLES=x1 x2 x4 x5 x11 x12 /ORDER=ANALYSIS.")
+            syntax.append("* Scientific Justification: Summarizing distributions.")
+            if "categorical" in p_low or any(v in p_low for v in ["league", "surface", "member", "region"]):
+                syntax.append("FREQUENCIES VARIABLES=x1 x2 x4 x11 /ORDER=ANALYSIS.")
             else:
-                syntax.append("* Scientific Justification: Recoding continuous variables into classes (K-Rule).")
-                target = "x1" if "balance" in p_low else ("x3" if "salary" in p_low else "x9")
-                syntax.append(f"RECODE {target} (LO THRU 20000=1) (20001 THRU 40000=2) (40001 THRU 60000=3) (HI=4) INTO {target}_Cat.")
-                syntax.append(f"VARIABLE LABELS {target}_Cat \"{target} (Classes)\".\nEXECUTE.\nFREQUENCIES {target}_Cat /BARCHART.")
+                # Recode للمتغيرات المستمرة
+                target = "x3" if "salary" in p_low or "area" in p_low else "x7"
+                syntax.append(f"RECODE {target} (LO THRU 50=1) (50 THRU 100=2) (HI=3) INTO {target}_Cat.\nEXECUTE.\nFREQUENCIES {target}_Cat.")
 
         # 2. الرسوم البيانية (Charts)
         elif "bar chart" in p_low:
-            syntax.append("* Scientific Justification: Visual comparison across groups.")
+            syntax.append("* Scientific Justification: Visual comparison of metrics.")
             if "average" in p_low or "mean" in p_low:
-                # تحديد المتغيرات بذكاء بناءً على النص
-                dep = "x8" if "children" in p_low else ("x1" if "balance" in p_low else "x3")
-                indep = "x2" if "race" in p_low else ("x6" if "city" in p_low else "x4")
-                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({dep}) BY {indep} /TITLE='Average Analysis'.")
-            elif "pie" in p_low or "percentage" in p_low:
-                 syntax.append("GRAPH /PIE=COUNT BY x5 /TITLE='Percentage Distribution'.")
+                dep = "x3" if "salary" in p_low or "area" in p_low else "x7"
+                indep = "x2" if "league" in p_low or "member" in p_low else "x11"
+                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({dep}) BY {indep} /TITLE='Mean Analysis'.")
             else:
-                syntax.append("GRAPH /BAR(SIMPLE)=COUNT BY x4 /TITLE='Distribution'.")
+                syntax.append("GRAPH /BAR(SIMPLE)=COUNT BY x11.")
 
-        # 3. التحليل الطبقي (Chapter 2 & 3)
-        elif any(x in p_low for x in ["each city", "each gender", "each region"]):
-            syntax.append("* Scientific Justification: Subgroup analysis requires splitting the file.")
-            sort_var = "x6" if "city" in p_low else "x4"
-            syntax.append(f"SORT CASES BY {sort_var}.\nSPLIT FILE LAYERED BY {sort_var}.\nFREQUENCIES VARIABLES=x1 x2 x3 /STATISTICS=MEAN MEDIAN MODE.\nSPLIT FILE OFF.")
-
-        # 4. اختبارات الفرضيات (Chapter 4, 5, 6)
+        # 3. اختبارات الفرضيات (Chapter 4, 5, 6)
         elif "test the hypothesis" in p_low:
-            syntax.append("* Scientific Justification: Inferential testing for significant differences.")
-            # استخراج قيمة الاختبار تلقائياً (مثل 35000 أو 90)
+            syntax.append("* Scientific Justification: Hypothesis testing for significance.")
+            # استخراج قيمة الاختبار (مثل 90 فوز أو 600 مساحة)
             val_match = re.search(r"(\d+)", p_low)
             val = val_match.group(1) if val_match else "0"
             
             if "equal" in p_low and "difference" not in p_low:
-                syntax.append(f"T-TEST /TESTVAL={val} /VARIABLES=x3.")
-            elif "independent" in p_low or "male" in p_low or "card" in p_low:
-                syntax.append("T-TEST GROUPS=x4(0 1) /VARIABLES=x1.")
-            else:
-                syntax.append("ONEWAY x3 BY x4 /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
+                target = "x7" if "wins" in p_low else "x3"
+                syntax.append(f"T-TEST /TESTVAL={val} /VARIABLES={target}.")
+            elif "difference" in p_low:
+                if any(v in p_low for v in ["league", "surface", "member", "gender"]):
+                    syntax.append("T-TEST GROUPS=x2(1 2) /VARIABLES=x3.")
+                else:
+                    syntax.append("ONEWAY x3 BY x11 /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
 
-        # 5. الارتباط والانحدار (Chapter 8, 9, 10)
+        # 4. الارتباط والانحدار (Chapter 8, 10)
         elif "correlation" in p_low:
-            method = "SPEARMAN" if any(x in p_low for x in ["happiness", "rank", "occupation"]) else "PEARSON"
-            syntax.append(f"CORRELATIONS /VARIABLES=x1 x2 /PRINT=TWOTAIL /METHOD={method}.")
+            syntax.append("CORRELATIONS /VARIABLES=x3 x7 /PRINT=TWOTAIL /METHOD=PEARSON.")
 
         elif "regression" in p_low:
-            syntax.append("* Scientific Justification: Multiple regression measures predictor effects.")
-            syntax.append("REGRESSION /STATISTICS COEFF OUTS R ANOVA COLLIN TOL /DEPENDENT x5\n  /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
+            syntax.append("REGRESSION /STATISTICS COEFF OUTS R ANOVA COLLIN TOL /DEPENDENT x5\n  /METHOD=ENTER x1 x2 x3 x4 x7.")
 
         syntax.append("")
         q_idx += 1
@@ -126,31 +116,25 @@ def generate_universal_syntax(paragraphs, var_map, excel_columns):
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
-# --- واجهة المستخدم Streamlit ---
-st.set_page_config(page_title="MBA SPSS Engine", layout="wide")
-st.title("🎓 محرك الأكواد الإحصائية الاحترافي (إصدار شامل)")
-st.info("هذا البرنامج مبرمج خصيصاً ليتناسب مع كافة ملفات البيانات (1، 2، 3، 4) ومنهج الدكتور محمد عبد السلام.")
+# --- Streamlit UI ---
+st.set_page_config(page_title="Universal SPSS Engine", layout="wide")
+st.title("🎓 محرك الإحصاء الشامل (v3 Professional)")
+st.info("هذا البرنامج يدعم الآن Datasets 1, 2, 3, 4 ويقوم بتوليد الكود بناءً على محتوى ملفاتك.")
 
-u_excel = st.file_uploader("1. ارفع ملف الإكسيل (Data set)", type=['xlsx', 'xls', 'csv'])
+u_excel = st.file_uploader("1. ارفع ملف الإكسيل (Data set 1, 2, 3, or 4)", type=['xlsx', 'xls', 'csv'])
 u_word = st.file_uploader("2. ارفع ملف الأسئلة (Word)", type=['docx', 'doc'])
 
 if u_excel and u_word:
     try:
-        # استخراج البيانات
-        var_map, paragraphs = extract_word_data(u_word)
-        
-        # قراءة أعمدة الإكسيل للتأكد من المسميات
-        df = pd.read_excel(u_excel) if not u_excel.name.endswith('.csv') else pd.read_csv(u_excel)
-        excel_cols = df.columns.tolist()
+        # قراءة البيانات والفقرات
+        var_map, paragraphs = extract_universal_data(u_word)
         
         if not paragraphs:
-            st.error("لم يتم العثور على أسئلة واضحة في ملف الوورد.")
+            st.error("لم يتم العثور على أسئلة في ملف الوورد.")
         else:
-            # توليد السينتاكس
-            final_syntax = generate_universal_syntax(paragraphs, var_map, excel_cols)
+            final_code = generate_universal_syntax(paragraphs, var_map)
             st.success("✅ تم توليد السينتاكس بنجاح!")
-            st.code(final_syntax, language='spss')
-            st.download_button("تحميل ملف .sps", final_syntax, "MBA_Statistics_Analysis.sps")
-            
+            st.code(final_code, language='spss')
+            st.download_button("تحميل السينتاكس (.sps)", final_code, "MBA_Universal_Report.sps")
     except Exception as e:
-        st.error(f"حدث خطأ أثناء المعالجة: {e}")
+        st.error(f"حدث خطأ: {e}")
