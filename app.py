@@ -4,94 +4,142 @@ from docx import Document
 import re
 import io
 
-# دالة التحليل الذكي للسؤال بناءً على المنهج الشامل
-def intelligent_spss_engine(doc_upload):
-    doc_bytes = doc_upload.read()
-    try:
-        doc = Document(io.BytesIO(doc_bytes))
-        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    except:
-        paragraphs = re.findall(r'[ -~]{5,}', doc_bytes.decode('ascii', errors='ignore'))
-
+# دالة استخراج تسميات المتغيرات والقيم من نص الوورد
+def extract_metadata(doc):
+    full_text = "\n".join([p.text for p in doc.paragraphs])
     mapping = {}
-    for p in paragraphs:
-        match = re.search(r"([Xx]\d+)\s*=\s*([^(\n\r.]+)", p, re.IGNORECASE)
-        if match:
-            mapping[match.group(1).upper()] = match.group(2).strip()
+    # البحث عن x1 = gender (male, female)
+    matches = re.findall(r"(x\d+)\s*=\s*([^(\n\r\t]+)", full_text, re.IGNORECASE)
+    for var, label in matches:
+        mapping[var.lower()] = label.strip()
+    return mapping
 
-    syntax = ["* Encoding: UTF-8.\n"]
-    for var, lbl in mapping.items():
-        syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
+# محرك إنشاء السينتاكس المطور
+def generate_spss_pro_engine(doc_upload, excel_cols):
+    doc_bytes = doc_upload.read()
+    doc = Document(io.BytesIO(doc_bytes))
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    var_map = extract_metadata(doc)
     
-    syntax.append("SET DECIMAL=DOT.\n")
+    syntax = [
+        "* Encoding: UTF-8.",
+        "* =========================================================================.",
+        "* MBA STATISTICAL ANALYSIS REPORT - GENERATED SYNTAX v26",
+        "* Prepared for: Dr. Mohamed A. Salam",
+        "* =========================================================================.\n",
+        "* --- [Variable and Value Labeling] --- .",
+        "* Scientific Justification: Proper labeling ensures that the output is readable."
+    ]
 
+    # 1. Variable Labels
+    if var_map:
+        syntax.append("VARIABLE LABELS")
+        labels = [f"  {v} \"{l}\"" for v, l in var_map.items()]
+        syntax.append(" /\n".join(labels) + ".")
+    
+    # 2. Value Labels (القيم الافتراضية الشائعة في الملفات)
+    syntax.append("\nVALUE LABELS x1 1 \"Male\" 2 \"Female\" /x2 1 \"White\" 2 \"Black\" 3 \"Others\"")
+    syntax.append("  /x4 1 \"North East\" 2 \"South East\" 3 \"West\" /x5 1 \"Very Happy\" 2 \"Pretty Happy\" 3 \"Not Too Happy\".\nEXECUTE.\n")
+
+    q_idx = 1
     for p in paragraphs:
         p_low = p.lower()
-        if re.search(r"X\d+\s*=", p): continue
-        
-        # ربط المتغيرات الموجودة في السؤال
-        found_vars = [v for v in mapping.keys() if v in p.upper() or mapping.get(v, "").lower()[:10] in p_low]
-        found_vars = list(dict.fromkeys(found_vars))
-        
-        syntax.append(f"\n* QUESTION: {p}.")
+        if "where:" in p_low or "=" in p_low or len(p) < 10: continue
 
-        # --- المحرك الذكي لاختيار الاختبار (Selection Logic) ---
-        
-        # 1. اختبارات الفرضيات (T-Test & ANOVA) - فصول 4، 5، 6
-        if any(w in p_low for w in ["test", "difference", "significant", "hypothesis", "impact"]):
-            if "gender" in p_low or "two groups" in p_low or "independent" in p_low:
-                syntax.append(f"T-TEST GROUPS=X4(0 1) /VARIABLES=X1 X3 /CRITERIA=CI(.95).")
-            elif "before" in p_low and "after" in p_low:
-                syntax.append("T-TEST PAIRS=BEFORE WITH AFTER (PAIRED) /CRITERIA=CI(.95) /MISSING=ANALYSIS.")
-            elif "anova" in p_low or "more than two" in p_low or "city" in p_low:
-                syntax.append(f"ONEWAY X1 X3 BY X6 /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).")
+        syntax.append(f"* --- [Q{q_idx}] {p[:70]}... --- .")
 
-        # 2. الارتباط والانحدار - فصول 8، 9، 10
-        elif "regression" in p_low or "y =" in p_low or "predict" in p_low:
-            syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT X1 /METHOD=ENTER {' '.join([v for v in mapping.keys() if v != 'X1'])}.")
-        elif "correlation" in p_low:
-            syntax.append(f"CORRELATIONS /VARIABLES={' '.join(found_vars) if len(found_vars)>1 else 'X1 X2 X3'} /PRINT=TWOTAIL NOSIG.")
+        # --- الإحصاء الوصفي والتكرارات ---
+        if "frequency table" in p_low and "categorical" in p_low:
+            syntax.append("* Scientific Justification: Frequency tables summarize categorical distributions.")
+            syntax.append("FREQUENCIES VARIABLES=x1 x2 x4 x5 x11 x12 /ORDER=ANALYSIS.")
 
-        # 3. الإحصاء الوصفي والرسوم - فصول 1، 2
-        elif "frequency table" in p_low:
-            if "classes" in p_low or "k rule" in p_low:
-                target = found_vars[0] if found_vars else "X1"
-                syntax.append(f"RECODE {target} (LO thru HI=COPY) INTO {target}_CL.\nFREQUENCIES VARIABLES={target}_CL /FORMAT=NOTABLE.")
-            else:
-                syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars) if found_vars else 'X4 X5 X6'}.")
-        
+        elif "frequency table" in p_low and "continuous" in p_low:
+            syntax.append("* Scientific Justification: Recoding continuous variables into classes helps identify patterns.")
+            if "salary" in p_low:
+                syntax.append("RECODE x3 (LO THRU 20000=1) (20001 THRU 40000=2) (40001 THRU 60000=3) (60001 THRU 80000=4) (HI=5) INTO Salary_Classes.")
+                syntax.append("VARIABLE LABELS Salary_Classes \"Salary (5 Classes)\".\nFREQUENCIES VARIABLES=Salary_Classes /BARCHART.")
+            elif "age" in p_low:
+                syntax.append("RECODE x9 (LO THRU 30=1) (31 THRU 45=2) (46 THRU 60=3) (61 THRU 75=4) (HI=5) INTO Age_Classes.")
+                syntax.append("VARIABLE LABELS Age_Classes \"Age (5 Classes)\".\nFREQUENCIES VARIABLES=Age_Classes /BARCHART.")
+
+        # --- الرسوم البيانية ---
         elif "bar chart" in p_low:
+            syntax.append("* Scientific Justification: Visual comparison of group frequencies or means.")
             if "average" in p_low or "mean" in p_low:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
+                var_target = "x3" if "salary" in p_low else ("x8" if "children" in p_low else "x1")
+                group_by = "x4" if "region" in p_low else "x2"
+                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({var_target}) BY {group_by} /TITLE='Average Analysis'.")
             else:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0] if found_vars else 'X5'}.")
+                syntax.append("GRAPH /BAR(SIMPLE)=COUNT BY x4 /TITLE='Number of Respondents'.")
 
+        elif "pie chart" in p_low:
+            syntax.append("* Scientific Justification: Pie charts show the composition of a whole.")
+            if "sum" in p_low:
+                syntax.append("GRAPH /PIE=SUM(x3) BY x11 /TITLE='Sum of Salaries'.")
+            else:
+                syntax.append("GRAPH /PIE=COUNT BY x1 /TITLE='Gender Distribution'.")
+
+        # --- الإحصاء الوصفي المتطور ---
+        elif "mean, median, mode" in p_low:
+            syntax.append("FREQUENCIES VARIABLES=x3 x9 x7 x8 /FORMAT=NOTABLE /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
+
+        # --- التوزيع الطبيعي والقيم المتطرفة ---
+        elif "normality" in p_low or "outliers" in p_low:
+            syntax.append("* Scientific Justification: Identifying normality and extreme outliers.")
+            syntax.append("EXAMINE VARIABLES=x3 x10 /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES.")
+
+        # --- التحليل الطبقي (Split File) ---
+        elif "each gender in each region" in p_low:
+            syntax.append("* Scientific Justification: Split file allows for subgroup analysis.")
+            syntax.append("SORT CASES BY x4 x1.\nSPLIT FILE LAYERED BY x4 x1.\nDESCRIPTIVES VARIABLES=x3 x9 x7 x8 /STATISTICS=MEAN STDDEV MIN MAX.\nSPLIT FILE OFF.")
+
+        # --- الفترات والفرضيات ---
         elif "confidence interval" in p_low:
-            for val in ["95", "99"]:
-                syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars) if found_vars else 'X1'} /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
+            syntax.append("EXAMINE VARIABLES=x3 x9 BY x4 /STATISTICS DESCRIPTIVES /CINTERVAL 95 /PLOT NONE.")
+            syntax.append("EXAMINE VARIABLES=x3 x9 BY x4 /STATISTICS DESCRIPTIVES /CINTERVAL 99 /PLOT NONE.")
 
-        # 4. التوزيع الطبيعي والقيم الشاذة - فصل 2
-        elif "normality" in p_low or "normality test" in p_low:
-            syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars) if found_vars else 'X1'} /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
-        elif "outliers" in p_low:
-            syntax.append(f"EXAMINE VARIABLES={found_vars[0] if found_vars else 'X1'} /PLOT BOXPLOT /EXTREME(5).")
+        elif "test the hypothesis" in p_low:
+            syntax.append("* Scientific Justification: Hypothesis testing for mean differences.")
+            if "equal 35000" in p_low:
+                syntax.append("T-TEST /TESTVAL=35000 /VARIABLES=x3.")
+            elif "difference" in p_low:
+                if "gender" in p_low or "independent" in p_low:
+                    syntax.append("T-TEST GROUPS=x1(1 2) /VARIABLES=x3.")
+                else:
+                    syntax.append("ONEWAY x3 BY x4 /STATISTICS DESCRIPTIVES.")
+
+        # --- الارتباط والانحدار ---
+        elif "correlation" in p_low:
+            syntax.append("CORRELATIONS /VARIABLES=x3 x9 /PRINT=TWOTAIL /METHOD=PEARSON.")
+
+        elif "regression" in p_low:
+            syntax.append("* Scientific Justification: Multiple regression measures predictor effects.")
+            syntax.append("REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA COLLIN /DEPENDENT x5\n  /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
+
+        syntax.append("")
+        q_idx += 1
 
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
-# واجهة المستخدم
-st.set_page_config(page_title="SPSS Master Engine v40", layout="wide")
-st.title("🤖 المحلل الإحصائي الذكي الشامل للمهندس محمد")
-st.write("هذا المحرك مبرمج بناءً على الفصول العشرة للمنهج ليحل أي بيانات إحصائية.")
+# --- Streamlit Interface ---
+st.set_page_config(page_title="MBA SPSS Expert", layout="wide")
+st.title("📊 محرك التقارير الإحصائية MBA (Dr. Salam Style)")
 
-u_excel = st.file_uploader("1. ارفع ملف البيانات (Excel/CSV)", type=['xlsx', 'xls', 'csv'])
-u_word = st.file_uploader("2. ارفع ملف الأسئلة (Word)", type=['docx', 'doc'])
+col1, col2 = st.columns(2)
+with col1:
+    u_excel = st.file_uploader("1. ارفع ملف البيانات (Excel)", type=['xlsx', 'xls', 'csv'])
+with col2:
+    u_word = st.file_uploader("2. ارفع ملف الأسئلة (Word)", type=['docx', 'doc'])
 
 if u_excel and u_word:
     try:
-        final_syntax = intelligent_spss_engine(u_word)
-        st.success("✅ تم تحليل الأسئلة وتوليد السينتاكس بناءً على منطق المنهج الكامل.")
-        st.code(final_syntax, language='spss')
-        st.download_button("تحميل السينتاكس النهائي (.sps)", final_syntax, "Master_Solution.sps")
+        df = pd.read_excel(u_excel) if not u_excel.name.endswith('.csv') else pd.read_csv(u_excel)
+        sps_code = generate_spss_pro_engine(u_word, df.columns.tolist())
+        
+        st.success("✅ تم توليد السينتاكس باحترافية طبقاً لمعايير المنهج.")
+        st.code(sps_code, language='spss')
+        
+        st.download_button(label="تحميل ملف .sps", data=sps_code, file_name="MBA_Professional_Analysis.sps", mime="text/plain")
     except Exception as e:
-        st.error(f"حدث خطأ أثناء المعالجة: {e}")
+        st.error(f"Error: {e}")
