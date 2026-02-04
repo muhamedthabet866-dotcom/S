@@ -1,97 +1,103 @@
 import streamlit as st
 import pandas as pd
-import math
+import numpy as np
 import re
+import math
 
-def generate_perfect_syntax(df, var_defs, questions_text):
-    # 1. تحليل خريطة المتغيرات وتنظيفها
+def generate_master_exam_syntax(df, var_defs, questions_text):
+    # 1. تحليل المتغيرات
     var_map = {}
-    variable_labels = []
     lines = var_defs.split('\n')
     for line in lines:
         match = re.search(r'(x\d+)\s*[=:]\s*([^(\n\r]+)', line, re.IGNORECASE)
         if match:
-            v_code = match.group(1).strip().lower()
+            v_code = match.group(1).strip().upper()
             v_label = match.group(2).strip()
-            # تنظيف التسمية من أي إضافات
-            clean_label = re.sub(r'\(.*\)', '', v_label).strip()
-            var_map[clean_label.lower()] = v_code
-            variable_labels.append(f"{v_code} \"{v_label}\"")
+            var_map[v_label.lower()] = v_code
 
-    # حساب K-rule بناءً على عدد البيانات المرفوعة
-    n = len(df) if df is not None else 100
+    # حساب الـ K-rule بناءً على حجم البيانات الفعلي
+    n = len(df) if df is not None else 60
     k_val = round(1 + 3.322 * math.log10(n))
-
+    
     syntax = [
         "* Encoding: UTF-8.",
+        "SET SEED=1234567.",
         "* " + "="*75,
-        "* MBA PERFECT SOLVER: DATA SET 1 ANALYSIS",
-        "* Built according to Dr. Mohamed Salam Curriculum",
+        "* MASTER EXAM SOLVER: DATA SET 1 (Banking Analysis)",
+        "* Organized Question-by-Question for Exam Submission",
         "* " + "="*75 + ".\n"
     ]
 
-    # التسميات والقيم
-    if variable_labels:
-        syntax.append("VARIABLE LABELS " + " /".join(variable_labels) + ".")
-    
-    # تحسين استخراج الـ Value Labels لـ x4 و x5 حصراً
-    syntax.append("VALUE LABELS x4 1 'Yes' 0 'No' /x5 1 'Yes' 0 'No'.")
+    # [PRE-ANALYSIS]
+    syntax.append("TITLE 'PRE-ANALYSIS SETUP: Labeling'.")
+    labels = [f"{v} \"{k.title()}\"" for k, v in var_map.items()]
+    syntax.append(f"VARIABLE LABELS {' /'.join(labels)}.")
+    syntax.append("VALUE LABELS X4 0 'No' 1 'Yes' /X5 0 'No' 1 'Yes' /X6 1 'City 1' 2 'City 2' 3 'City 3' 4 'City 4'.")
     syntax.append("EXECUTE.\n")
 
-    q_low = questions_text.lower()
+    # [Q1] Frequency Tables
+    syntax.append("TITLE 'QUESTION 1: Frequency Tables for Categorical Variables'.")
+    syntax.append("FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.")
+    syntax.append("ECHO 'INTERPRETATION: Distribution of debit cards, interest, and city locations'.\n")
 
-    # [Q1] الجداول التكرارية للبيانات الوصفية
-    if "frequency table" in q_low and "categorical" in q_low:
-        syntax.append("* [Q1] Frequency tables for categorical variables (Debit Card, Interest, City).")
-        syntax.append("FREQUENCIES VARIABLES=x4 x5 x6 /ORDER=ANALYSIS.\n")
+    # [Q2 & Q3] Recoding & K-Rule
+    syntax.append("TITLE 'QUESTION 2 & 3: Continuous Data (Recoding & K-Rule)'.")
+    syntax.append(f"* Using K-rule: k = 1 + 3.322 * log10({n}) = {k_val} classes.")
+    # اقتراح RECODE افتراضي بناءً على البيانات
+    syntax.append("RECODE X1 (LO THRU 1000=1) (1000.01 THRU 2000=2) (2000.01 THRU 3000=3) (3000.01 THRU HI=4) INTO X1_Classes.")
+    syntax.append("VARIABLE LABELS X1_Classes 'Account Balance (Categorized)'.")
+    syntax.append("FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.\n")
 
-    # [Q2-Q4] الإحصاء الوصفي والـ K-rule
-    if "balance" in q_low or "transaction" in q_low:
-        syntax.append(f"* [Q2-Q4] Descriptive Statistics with K-rule (k={k_val}).")
-        syntax.append("* Justification: Using mean, median, and skewness to analyze distribution shape.")
-        syntax.append("FREQUENCIES VARIABLES=x1 x2 /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /HISTOGRAM /FORMAT=NOTABLE.\n")
+    # [Q4 & Q6] Descriptives & Skewness
+    syntax.append("TITLE 'QUESTION 4 & 6: Descriptive Stats & Skewness Analysis'.")
+    syntax.append("FREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE.")
+    syntax.append("ECHO 'COMMENT: If Skewness is between -1 and +1, the distribution is approximately symmetric'.\n")
 
-    # [Q9] الاستكشاف وفترات الثقة
-    if "confidence" in q_low or "outliers" in q_low:
-        syntax.append("* [Q9] Normality, Outliers, and Confidence Intervals (95% & 99%).")
-        syntax.append("EXAMINE VARIABLES=x1 /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
-        syntax.append("EXAMINE VARIABLES=x1 /CINTERVAL 99.\n")
+    # [Q5] Histograms
+    syntax.append("TITLE 'QUESTION 5: Individual Histograms'.")
+    syntax.append("GRAPH /HISTOGRAM=X1 /TITLE='Distribution of Account Balance'.")
+    syntax.append("GRAPH /HISTOGRAM=X2 /TITLE='Distribution of ATM Transactions'.\n")
 
-    # [Q4/Q7 مكرر] التحليل المقارن (Split File)
-    if "each city" in q_low or "each debit" in q_low:
-        syntax.append("* [Task] Grouped Analysis for each City and Debit Card status.")
-        syntax.append("SORT CASES BY x6 x4.\nSPLIT FILE LAYERED BY x6 x4.")
-        syntax.append("DESCRIPTIVES VARIABLES=x1 x2 /STATISTICS=MEAN MEDIAN STDDEV SKEWNESS.")
-        syntax.append("SPLIT FILE OFF.\n")
-
-    # [Q7-Q8] الرسوم البيانية
-    if "bar chart" in q_low:
-        syntax.append("* [Q7] Bar Charts for Comparison.")
-        syntax.append("GRAPH /BAR(SIMPLE)=MEAN(x1) BY x6 /TITLE='Average Balance by City'.")
-        syntax.append("GRAPH /BAR(GROUPED)=MEAN(x1) BY x6 BY x4 /TITLE='Avg Balance by City & Debit Card'.")
+    # [Q7 & Q8] Split Analysis
+    syntax.append("TITLE 'QUESTION 7 & 8: Grouped Analysis (City & Debit Card)'.")
+    syntax.append("SORT CASES BY X6.\nSPLIT FILE SEPARATE BY X6.")
+    syntax.append("DESCRIPTIVES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN STDDEV MIN MAX SKEWNESS.")
+    syntax.append("SPLIT FILE OFF.\n")
     
-    if "pie chart" in q_low:
-        syntax.append("\n* [Q8] Pie Chart for Interest Percentage.")
-        syntax.append("GRAPH /PIE=COUNT BY x5 /TITLE='Percentage of Customers Receiving Interest'.")
+    syntax.append("SORT CASES BY X4.\nSPLIT FILE SEPARATE BY X4.")
+    syntax.append("DESCRIPTIVES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN STDDEV SKEWNESS.")
+    syntax.append("SPLIT FILE OFF.\n")
 
-    syntax.append("\nEXECUTE.")
+    # [Visuals]
+    syntax.append("TITLE 'VISUALIZATIONS: Bar and Pie Charts'.")
+    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6 /TITLE='Avg Balance by City'.")
+    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4 /TITLE='Avg Balance by City and Card Status'.")
+    syntax.append("GRAPH /PIE=COUNT BY X5 /TITLE='Percentage of Customers Receiving Interest'.\n")
+
+    # [Q9] Explore & Normality
+    syntax.append("TITLE 'QUESTION 9: Normality, CI, and Outliers'.")
+    syntax.append("EXAMINE VARIABLES=X1 /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
+    syntax.append("EXAMINE VARIABLES=X1 /CINTERVAL 99.")
+    syntax.append("ECHO 'RULE: If Shapiro-Wilk Sig > 0.05, apply Empirical Rule. If < 0.05, use Chebyshev'.\n")
+
+    syntax.append("EXECUTE.")
     return "\n".join(syntax)
 
-# --- واجهة المستخدم ---
-st.set_page_config(page_title="MBA Ideal SPSS Solver", layout="wide")
-st.title("🎓 المحلل الإحصائي المثالي (منهج د. محمد عبد السلام)")
+# --- Streamlit UI ---
+st.set_page_config(page_title="MBA SPSS Master Solver", layout="wide")
+st.title("🎓 المحلل الإحصائي الشامل (إصدار الامتحان)")
 
-up = st.file_uploader("1. ارفع ملف الداتا (Data Set 1)", type=['xlsx', 'csv'])
+file = st.file_uploader("1. ارفع ملف الداتا", type=['xlsx', 'csv'])
 c1, c2 = st.columns(2)
 with c1:
-    v_in = st.text_area("2. كود المتغيرات (x1=Balance...)", height=200)
+    v_in = st.text_area("2. تعريف المتغيرات (Mapping)", value="x1 = Account Balance\nx2 = ATM Transactions\nx3 = Other Services\nx4 = Debit Card\nx5 = Interest\nx6 = City", height=200)
 with c2:
-    q_in = st.text_area("3. أسئلة الامتحان (انسخ الأسئلة هنا)", height=200)
+    q_in = st.text_area("3. أسئلة الامتحان", height=200)
 
-if st.button("توليد الحل النموذجي"):
-    if v_in and q_in:
-        df = pd.read_excel(up) if up and up.name.endswith('xlsx') else (pd.read_csv(up) if up else None)
-        result = generate_perfect_syntax(df, v_in, q_in)
-        st.subheader("✅ الحل المثالي الجاهز للـ SPSS:")
-        st.code(result, language="spss")
-        st.download_button("تحميل ملف .SPS", result, file_name="Perfect_Solution.sps")
+if st.button("توليد الحل التكتيكي النموذجي"):
+    if v_in:
+        df = pd.read_excel(file) if file and file.name.endswith('xlsx') else (pd.read_csv(file) if file else None)
+        solution = generate_master_exam_syntax(df, v_in, q_in)
+        st.subheader("🚀 SPSS Syntax المولد (جاهز للتسليم):")
+        st.code(solution, language="spss")
+        st.download_button("تحميل الحل .SPS", solution, file_name="Final_Exam_Solution.sps")
