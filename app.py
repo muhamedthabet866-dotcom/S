@@ -4,9 +4,10 @@ import numpy as np
 import re
 import math
 
-def generate_master_exam_syntax(df, var_defs, questions_text):
-    # 1. تحليل المتغيرات
+def universal_spss_engine(df, var_defs, questions_text):
+    # 1. بناء قاموس المتغيرات (Variable Mapping)
     var_map = {}
+    variable_labels = []
     lines = var_defs.split('\n')
     for line in lines:
         match = re.search(r'(x\d+)\s*[=:]\s*([^(\n\r]+)', line, re.IGNORECASE)
@@ -14,90 +15,105 @@ def generate_master_exam_syntax(df, var_defs, questions_text):
             v_code = match.group(1).strip().upper()
             v_label = match.group(2).strip()
             var_map[v_label.lower()] = v_code
+            variable_labels.append(f"{v_code} \"{v_label}\"")
 
-    # حساب الـ K-rule بناءً على حجم البيانات الفعلي
-    n = len(df) if df is not None else 60
-    k_val = round(1 + 3.322 * math.log10(n))
-    
+    # 2. تحديد خصائص البيانات (Data Profiling)
+    n = len(df) if df is not None else 100
+    k_rule = round(1 + 3.322 * math.log10(n))
+
     syntax = [
         "* Encoding: UTF-8.",
-        "SET SEED=1234567.",
         "* " + "="*75,
-        "* MASTER EXAM SOLVER: DATA SET 1 (Banking Analysis)",
-        "* Organized Question-by-Question for Exam Submission",
+        "* UNIVERSAL AUTO-SOLVER (MBA CURRICULUM EDITION)",
+        "* Matches Any Exam Questions with Any Dataset Mapping",
         "* " + "="*75 + ".\n"
     ]
 
-    # [PRE-ANALYSIS]
-    syntax.append("TITLE 'PRE-ANALYSIS SETUP: Labeling'.")
-    labels = [f"{v} \"{k.title()}\"" for k, v in var_map.items()]
-    syntax.append(f"VARIABLE LABELS {' /'.join(labels)}.")
-    syntax.append("VALUE LABELS X4 0 'No' 1 'Yes' /X5 0 'No' 1 'Yes' /X6 1 'City 1' 2 'City 2' 3 'City 3' 4 'City 4'.")
+    # [PHASE 1] تهيئة المتغيرات بناءً على المنهج
+    syntax.append("TITLE 'PHASE 1: Variable & Value Definitions'.")
+    if variable_labels:
+        syntax.append("VARIABLE LABELS " + " /".join(variable_labels) + ".")
+    
+    # التعرف الذكي على المتغيرات الوصفية لإضافة Value Labels
+    categorical_vars = [v for k, v in var_map.items() if any(word in k for word in ["gender", "card", "interest", "city", "region", "yes", "no"])]
+    if categorical_vars:
+        labels_code = " /".join([f"{v} 0 'No/Group A' 1 'Yes/Group B'" for v in categorical_vars if v != "X6"])
+        if labels_code: syntax.append(f"VALUE LABELS {labels_code}.")
     syntax.append("EXECUTE.\n")
 
-    # [Q1] Frequency Tables
-    syntax.append("TITLE 'QUESTION 1: Frequency Tables for Categorical Variables'.")
-    syntax.append("FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.")
-    syntax.append("ECHO 'INTERPRETATION: Distribution of debit cards, interest, and city locations'.\n")
-
-    # [Q2 & Q3] Recoding & K-Rule
-    syntax.append("TITLE 'QUESTION 2 & 3: Continuous Data (Recoding & K-Rule)'.")
-    syntax.append(f"* Using K-rule: k = 1 + 3.322 * log10({n}) = {k_val} classes.")
-    # اقتراح RECODE افتراضي بناءً على البيانات
-    syntax.append("RECODE X1 (LO THRU 1000=1) (1000.01 THRU 2000=2) (2000.01 THRU 3000=3) (3000.01 THRU HI=4) INTO X1_Classes.")
-    syntax.append("VARIABLE LABELS X1_Classes 'Account Balance (Categorized)'.")
-    syntax.append("FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.\n")
-
-    # [Q4 & Q6] Descriptives & Skewness
-    syntax.append("TITLE 'QUESTION 4 & 6: Descriptive Stats & Skewness Analysis'.")
-    syntax.append("FREQUENCIES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE.")
-    syntax.append("ECHO 'COMMENT: If Skewness is between -1 and +1, the distribution is approximately symmetric'.\n")
-
-    # [Q5] Histograms
-    syntax.append("TITLE 'QUESTION 5: Individual Histograms'.")
-    syntax.append("GRAPH /HISTOGRAM=X1 /TITLE='Distribution of Account Balance'.")
-    syntax.append("GRAPH /HISTOGRAM=X2 /TITLE='Distribution of ATM Transactions'.\n")
-
-    # [Q7 & Q8] Split Analysis
-    syntax.append("TITLE 'QUESTION 7 & 8: Grouped Analysis (City & Debit Card)'.")
-    syntax.append("SORT CASES BY X6.\nSPLIT FILE SEPARATE BY X6.")
-    syntax.append("DESCRIPTIVES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN STDDEV MIN MAX SKEWNESS.")
-    syntax.append("SPLIT FILE OFF.\n")
+    # [PHASE 2] محرك تحليل الأسئلة (Pattern Matching Engine)
+    # هذا الجزء يحلل أي نص سؤال ويستخرج المهمة المطلوبة منه
+    questions = re.split(r'\n\d+[\.\)]|\', questions_text)
     
-    syntax.append("SORT CASES BY X4.\nSPLIT FILE SEPARATE BY X4.")
-    syntax.append("DESCRIPTIVES VARIABLES=X1 X2 /STATISTICS=MEAN MEDIAN STDDEV SKEWNESS.")
-    syntax.append("SPLIT FILE OFF.\n")
+    for i, q in enumerate(questions):
+        if len(q.strip()) < 5: continue
+        q_low = q.lower()
+        syntax.append(f"TITLE 'QUESTION ANALYSIS: Task {i}'.")
+        syntax.append(f"ECHO 'Processing Question: {q.strip()[:100]}...'.")
 
-    # [Visuals]
-    syntax.append("TITLE 'VISUALIZATIONS: Bar and Pie Charts'.")
-    syntax.append("GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6 /TITLE='Avg Balance by City'.")
-    syntax.append("GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4 /TITLE='Avg Balance by City and Card Status'.")
-    syntax.append("GRAPH /PIE=COUNT BY X5 /TITLE='Percentage of Customers Receiving Interest'.\n")
+        # البحث عن المتغيرات المذكورة في هذا السؤال تحديداً
+        target_vars = [code for label, code in var_map.items() if label in q_low]
+        vars_str = " ".join(target_vars) if target_vars else "X1 X2" # افتراضي إذا لم يجد
 
-    # [Q9] Explore & Normality
-    syntax.append("TITLE 'QUESTION 9: Normality, CI, and Outliers'.")
-    syntax.append("EXAMINE VARIABLES=X1 /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
-    syntax.append("EXAMINE VARIABLES=X1 /CINTERVAL 99.")
-    syntax.append("ECHO 'RULE: If Shapiro-Wilk Sig > 0.05, apply Empirical Rule. If < 0.05, use Chebyshev'.\n")
+        # --- القواعد الذكية لاختيار الاختبار (Decision Logic) ---
+        
+        # أ. الإحصاء الوصفي (Chapter 2)
+        if any(w in q_low for w in ["mean", "median", "mode", "descriptive", "skewness", "variance"]):
+            syntax.append(f"FREQUENCIES VARIABLES={vars_str} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE SKEWNESS /FORMAT=NOTABLE.")
+
+        # ب. جداول التكرار وفئات الـ K-rule (Chapter 2)
+        if "frequency" in q_low or "table" in q_low or "classes" in q_low:
+            syntax.append(f"* Applying K-rule: {k_rule} classes recommended.")
+            syntax.append(f"FREQUENCIES VARIABLES={vars_str} /HISTOGRAM /ORDER=ANALYSIS.")
+
+        # ج. المقارنات وفروق المتوسطات (Chapter 4, 5, 6)
+        if any(w in q_low for w in ["compare", "difference", "effect", "between"]):
+            grouping_var = "X6" if "city" in q_low or "group" in q_low else "X4"
+            if "city" in q_low or "more than two" in q_low:
+                syntax.append(f"ONEWAY X1 BY {grouping_var} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).") #
+            else:
+                syntax.append(f"T-TEST GROUPS={grouping_var}(0 1) /VARIABLES=X1.") #
+
+        # د. الاستكشاف وفترات الثقة والاعتدالية (Chapter 3)
+        if any(w in q_low for w in ["normality", "outliers", "confidence", "extreme", "examine"]):
+            syntax.append(f"EXAMINE VARIABLES={vars_str} /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES /CINTERVAL 95.")
+            if "99" in q_low: syntax.append(f"EXAMINE VARIABLES={vars_str} /CINTERVAL 99.")
+
+        # هـ. الرسوم البيانية
+        if "bar" in q_low: syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
+        if "pie" in q_low: syntax.append(f"GRAPH /PIE=COUNT BY {target_vars[0] if target_vars else 'X5'}.")
+        if "histogram" in q_low: syntax.append(f"GRAPH /HISTOGRAM={vars_str}.")
+
+        # و. الارتباط والانحدار (Chapter 8, 9, 10)
+        if "regression" in q_low or "predict" in q_low or "relationship" in q_low:
+            syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT X1 /METHOD=ENTER X2 X3 X4.") #
+
+        syntax.append("ECHO '--------------------------------------------------'.\n")
 
     syntax.append("EXECUTE.")
     return "\n".join(syntax)
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="MBA SPSS Master Solver", layout="wide")
-st.title("🎓 المحلل الإحصائي الشامل (إصدار الامتحان)")
+# --- واجهة Streamlit ---
+st.set_page_config(page_title="Universal SPSS Solver", layout="wide")
+st.title("🤖 المحرك الشامل لحل أي امتحان SPSS")
+st.info("هذا التطبيق مبرمج ليفهم 'منطق المنهج' ويطبقه على أي بيانات أو أسئلة ترفعها.")
 
-file = st.file_uploader("1. ارفع ملف الداتا", type=['xlsx', 'csv'])
-c1, c2 = st.columns(2)
-with c1:
-    v_in = st.text_area("2. تعريف المتغيرات (Mapping)", value="x1 = Account Balance\nx2 = ATM Transactions\nx3 = Other Services\nx4 = Debit Card\nx5 = Interest\nx6 = City", height=200)
-with c2:
-    q_in = st.text_area("3. أسئلة الامتحان", height=200)
+with st.sidebar:
+    st.header("الإعدادات")
+    up = st.file_uploader("1. ملف البيانات", type=['xlsx', 'csv'])
 
-if st.button("توليد الحل التكتيكي النموذجي"):
-    if v_in:
-        df = pd.read_excel(file) if file and file.name.endswith('xlsx') else (pd.read_csv(file) if file else None)
-        solution = generate_master_exam_syntax(df, v_in, q_in)
-        st.subheader("🚀 SPSS Syntax المولد (جاهز للتسليم):")
-        st.code(solution, language="spss")
-        st.download_button("تحميل الحل .SPS", solution, file_name="Final_Exam_Solution.sps")
+col1, col2 = st.columns(2)
+with col1:
+    v_in = st.text_area("2. تعريف متغيرات الامتحان الحالي:", height=300, 
+                        placeholder="X1 = Account Balance\nX2 = Transactions...")
+with col2:
+    q_in = st.text_area("3. الصق نص الأسئلة بالكامل (أي امتحان):", height=300, 
+                        placeholder="Construct a frequency table...\nCompare means between cities...")
+
+if st.button("🚀 حل الامتحان وتوليد الـ Syntax"):
+    if v_in and q_in:
+        df = pd.read_excel(up) if up and up.name.endswith('xlsx') else (pd.read_csv(up) if up else None)
+        final_solution = universal_spss_engine(df, v_in, q_in)
+        st.subheader("✅ كود الحل النموذجي المولد:")
+        st.code(final_solution, language="spss")
+        st.download_button("تحميل ملف الحل .SPS", final_solution, file_name="Universal_Solution.sps")
