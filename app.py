@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import re
 
-def generate_exact_final_syntax(df, var_defs, questions_text):
-    # مصفوفة تخزين الأسطر
+def generate_target_model_syntax(df, var_defs, questions_text):
+    # Header Setup
     syntax = [
         "* Encoding: UTF-8.",
         "* " + "="*73 + ".",
@@ -15,7 +15,7 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
     # --- [Step 1: Variable and Value Labeling] ---
     syntax.append("* --- [Variable and Value Labeling] --- .")
     syntax.append("* Scientific Justification: Proper labeling ensures that the output is readable and")
-    syntax.append("* that categorical variables are correctly interpreted during analysis.\n")
+    syntax.append("* that categorical variables are correctly interpreted during analysis[cite: 1, 20].\n")
     
     var_map = {}
     lines = var_defs.split('\n')
@@ -31,7 +31,7 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
     if labels_list:
         syntax.append("VARIABLE LABELS " + " /".join(labels_list) + ".")
     
-    # Value Labels (الثوابت المنهجية المطلوبة في النموذج)
+    # Value Labels (Fixed curriculum standards for Data Set 4)
     syntax.append("\nVALUE LABELS x1 1 \"Male\" 2 \"Female\"")
     syntax.append("  /x2 1 \"White\" 2 \"Black\" 3 \"Others\"")
     syntax.append("  /x4 1 \"North East\" 2 \"South East\" 3 \"West\"")
@@ -41,17 +41,17 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
     syntax.append("  /x12 1 \"Health\" 2 \"Financial\" 3 \"Family\" 4 \"Legal\" 5 \"Personal\" 6 \"Service\" 7 \"Miscellaneous\".")
     syntax.append("EXECUTE.\n")
 
-    # معالجة محتوى الأسئلة لتجميعها تحت عناوين موحدة ومطابقة للنموذج
+    # Processing Questions Content
     q_low = questions_text.lower()
 
-    # Q1: Frequency tables [cite: 1]
+    # Q1: Frequency tables
     if "frequency table" in q_low and "categorical" in q_low:
         syntax.append("* --- [Q1] Frequency tables for Categorical Data --- .")
         syntax.append("* Scientific Justification: Frequency tables are used to summarize the distribution")
         syntax.append("* and percentage of categorical variables like gender, race, and region[cite: 1].")
         syntax.append("FREQUENCIES VARIABLES=x1 x2 x4 x5 x11 x12 /ORDER=ANALYSIS.\n")
 
-    # Q2-Q4: Bar Charts [cite: 2, 3, 4]
+    # Q2-Q4: Bar Charts (Grouped)
     if "bar chart" in q_low:
         syntax.append("* --- [Q2 - Q4] Bar Charts --- .")
         syntax.append("* Scientific Justification: Bar charts provide a visual comparison of frequency counts")
@@ -60,7 +60,7 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
         syntax.append("GRAPH /BAR(SIMPLE)=MEAN(x3) BY x4 /TITLE='Average Salary by Region'.")
         syntax.append("GRAPH /BAR(SIMPLE)=MEAN(x8) BY x2 /TITLE='Average Children by Race'.\n")
 
-    # Q5-Q6: Pie Charts [cite: 5, 6]
+    # Q5-Q6: Pie Charts (Grouped)
     if "pie chart" in q_low:
         syntax.append("* --- [Q5 - Q6] Pie Charts --- .")
         syntax.append("* Scientific Justification: Pie charts are effective for showing the composition")
@@ -68,7 +68,7 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
         syntax.append("GRAPH /PIE=SUM(x3) BY x11 /TITLE='Sum of Salaries by Occupation'.")
         syntax.append("GRAPH /PIE=COUNT BY x1 /TITLE='Gender Percentage'.\n")
 
-    # Q7-Q8: Continuous Data & Descriptive Stats [cite: 7, 8]
+    # Q7-Q8: Continuous Data & Descriptive Stats (Grouped)
     if "continuous" in q_low or "descriptive" in q_low:
         syntax.append("* --- [Q7 - Q8] Continuous Data and Descriptive Statistics --- .")
         syntax.append("* Scientific Justification: Recoding continuous variables into classes helps in")
@@ -79,14 +79,14 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
         syntax.append("FREQUENCIES VARIABLES=Salary_Classes Age_Classes /FORMAT=NOTABLE.")
         syntax.append("FREQUENCIES VARIABLES=x3 x9 x7 x8 /FORMAT=NOTABLE /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.\n")
 
-    # Q9: Normality [cite: 9]
-    if "normality" in q_low:
+    # Q9: Normality and Outliers
+    if "normality" in q_low or "outliers" in q_low:
         syntax.append("* --- [Q9] Normality and Outliers --- .")
         syntax.append("* Scientific Justification: Normality tests determine the suitability of parametric tests.")
         syntax.append("* Boxplots are the standard method for identifying extreme outliers[cite: 9].")
         syntax.append("EXAMINE VARIABLES=x3 x10 /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES.\n")
 
-    # Q10: Grouped Analysis (Split File) [cite: 10]
+    # Q10: Grouped Analysis (Split File)
     if "each gender" in q_low or "each region" in q_low:
         syntax.append("* --- [Q10] Grouped Analysis for Gender and Region --- .")
         syntax.append("* Scientific Justification: Split file allows for localized descriptive analysis[cite: 10].")
@@ -94,11 +94,11 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
         syntax.append("FREQUENCIES VARIABLES=x3 x9 x7 x8 /FORMAT=NOTABLE /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
         syntax.append("SPLIT FILE OFF.\n")
 
-    # Q19-Q20: Regression [cite: 19, 20]
+    # Q19-Q20: Linear Regression
     if "regression" in q_low or "y =" in q_low:
         syntax.append("* --- [Q19 - Q20] Linear Regression Model --- .")
         syntax.append("* Scientific Justification: Regression measures the strength and direction of the")
-        syntax.append("* relationship between predictors and General Happiness (x5)[cite: 19, 20].")
+        syntax.append("* relationship between predictors and General Happiness (x5).")
         syntax.append("REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA COLLIN")
         syntax.append("  /CRITERIA=PIN(.05) POUT(.10) /NOORIGIN /DEPENDENT x5")
         syntax.append("  /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
@@ -106,15 +106,14 @@ def generate_exact_final_syntax(df, var_defs, questions_text):
     syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="SPSS Model Syntax Generator", layout="wide")
+# --- Streamlit UI Setup ---
+st.set_page_config(page_title="MBA SPSS Engine", layout="wide")
 st.title("🎓 Professional SPSS Syntax Engine (v26)")
 
-# رفع الملف ضروري للعمليات الحسابية
 uploaded_file = st.file_uploader("1. Upload Excel Data File", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # قراءة البيانات لتسهيل المعالجة البرمجية اللاحقة
+    # Read data safely
     df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
     st.success("File loaded successfully.")
 
@@ -126,8 +125,6 @@ if uploaded_file:
 
     if st.button("Generate Final Model Syntax"):
         if v_in and q_in:
-            result = generate_exact_final_syntax(df, v_in, q_in)
-            # عرض الكود في منطقة قابلة للنسخ
+            result = generate_target_model_syntax(df, v_in, q_in)
             st.code(result, language='spss')
-            # زر التحميل
             st.download_button("Download .SPS File", result, file_name="MBA_Analysis_Solution.sps")
