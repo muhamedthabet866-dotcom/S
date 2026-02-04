@@ -1,130 +1,146 @@
 import streamlit as st
 import pandas as pd
 import re
+import numpy as np
 
-# Function to generate SPSS Syntax based on curriculum logic
-def generate_final_exam_syntax(df, var_defs, questions_text):
+# 1. Logic to identify variables and their roles in a sentence
+def identify_roles(question, var_map):
+    found = []
+    # Identify variables mentioned in the text (either by label or code)
+    for label, code in var_map.items():
+        if label in question.lower() or code in question.lower():
+            found.append(code)
+    # Remove duplicates while preserving order
+    return list(dict.fromkeys(found))
+
+def generate_curriculum_syntax(df, var_defs, questions_text):
     syntax = [
-        "* Encoding: UTF-8.", 
-        "SET DECIMAL=DOT.", 
-        "* " + "="*65 + ".", 
-        "* SPSS Comprehensive Solution for MBA Exam", 
-        "* Prepared for: Dr. Mohamed A. Salam",
-        "* " + "="*65 + ".\n"
+        "* Encoding: UTF-8.",
+        "SET DECIMAL=DOT.",
+        "* " + "="*75 + ".",
+        "* FINAL MODEL SOLUTION - ALIGNED WITH CURRICULUM (CHAPTERS 1-10)",
+        "* " + "="*75 + ".\n"
     ]
-    
-    # 1. Variable Definitions Setup
-    syntax.append("* --- [Step 1: Variable and Value Labeling] --- .")
-    var_map = {}
+
+    # --- Step 1: Variable and Value Labeling ---
+    var_map = {} # label -> code
+    reverse_map = {} # code -> label
     lines = var_defs.split('\n')
+    syntax.append("* --- [PRE-ANALYSIS] Defining Labels --- .")
+    
     for line in lines:
-        # Regex to capture patterns like x1 = Gender or x1 : Gender
         match = re.search(r'(x\d+)\s*[=:]\s*([^(\n\r]+)', line, re.IGNORECASE)
         if match:
-            v_name = match.group(1).lower().strip()
+            v_code = match.group(1).lower().strip()
             v_label = match.group(2).strip()
-            var_map[v_label.lower()] = v_name
-            syntax.append(f"VARIABLE LABELS {v_name} \"{v_label}\".")
+            var_map[v_label.lower()] = v_code
+            reverse_map[v_code] = v_label
+            syntax.append(f"VARIABLE LABELS {v_code} \"{v_label}\".")
+    
+    # Standard Value Labels based on curriculum
+    syntax.append("\nVALUE LABELS x1 1 'Male' 2 'Female' /x2 1 'White' 2 'Black' 3 'Other'")
+    syntax.append("  /x4 1 'North East' 2 'South East' 3 'West' /x5 1 'Very Happy' 2 'Pretty Happy' 3 'Not Too Happy'.")
     syntax.append("EXECUTE.\n")
 
-    # 2. Analyzing Questions and Mapping to SPSS Commands
+    # --- Step 2: Processing Questions ---
     qs = questions_text.split('\n')
-    for i, q in enumerate(qs):
+    for q in qs:
         q_low = q.lower().strip()
-        if len(q_low) < 5: continue
+        if len(q_low) < 10 or "where" in q_low: continue
         
-        syntax.append(f"* [Q{i+1}] {q[:100]}")
+        syntax.append(f"* QUESTION: {q[:100]}")
+        vars_found = identify_roles(q_low, var_map)
 
-        # Map variables mentioned in the question text
-        found_vars = [v for label, v in var_map.items() if label in q_low]
+        # A. Frequencies (Categorical)
+        if "frequency table" in q_low and "categorical" in q_low:
+            cat_vars = [v for v in vars_found if v in ['x1', 'x2', 'x4', 'x5', 'x11', 'x12']]
+            if not cat_vars: cat_vars = ['x1', 'x2', 'x4', 'x5']
+            syntax.append(f"FREQUENCIES VARIABLES={' '.join(cat_vars)} /ORDER=ANALYSIS.")
 
-        # --- Charts (Bar & Pie) ---
-        if "chart" in q_low:
+        # B. Charts with Correct Variable Order
+        elif "chart" in q_low:
             if "bar chart" in q_low:
-                if "average" in q_low and len(found_vars) >= 2:
-                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({found_vars[0]}) BY {found_vars[1]}.")
-                elif found_vars:
-                    syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0]}.")
-            elif "pie chart" in q_low and found_vars:
-                syntax.append(f"GRAPH /PIE=COUNT BY {found_vars[0]}.")
+                if "average" in q_low or "mean" in q_low:
+                    # Logic: Average [Dependent] BY [Independent]
+                    # Usually Salary (x3), Age (x9), or Children (x8) are dependent
+                    dep = next((v for v in vars_found if v in ['x3', 'x9', 'x8', 'x7']), "x3")
+                    indep = next((v for v in vars_found if v != dep), "x4")
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({dep}) BY {indep}.")
+                else:
+                    # Frequency count by group
+                    indep = vars_found[0] if vars_found else "x4"
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {indep}.")
+            
+            elif "pie chart" in q_low:
+                if "sum" in q_low:
+                    dep = next((v for v in vars_found if v in ['x3', 'x9']), "x3")
+                    indep = next((v for v in vars_found if v != dep), "x11")
+                    syntax.append(f"GRAPH /PIE=SUM({dep}) BY {indep}.")
+                else:
+                    indep = next((v for v in vars_found if v in ['x1', 'x5']), "x1")
+                    syntax.append(f"GRAPH /PIE=COUNT BY {indep}.")
 
-        # --- Descriptive Statistics ---
-        elif any(word in q_low for word in ["mean", "median", "mode", "deviation", "find the"]):
-            if found_vars:
-                syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
-
-        # --- Classes / Recoding ---
-        elif "classes" in q_low or "continuous" in q_low:
-            for v in found_vars:
+        # C. Recoding into 5 Classes (Dynamic Range)
+        elif "continuous data" in q_low or "classes" in q_low:
+            for v in vars_found:
                 if v in df.columns:
                     v_min, v_max = df[v].min(), df[v].max()
                     step = (v_max - v_min) / 5
-                    syntax.append(f"* Recoding {v} into 5 classes based on range.")
-                    syntax.append(f"RECODE {v} (LO THRU {v_min+step:.1f}=1) ({v_min+step:.1f} THRU {v_min+2*step:.1f}=2) "
-                                 f"({v_min+2*step:.1f} THRU {v_min+3*step:.1f}=3) ({v_min+3*step:.1f} THRU {v_min+4*step:.1f}=4) "
+                    syntax.append(f"RECODE {v} (LO THRU {v_min+step:.0f}=1) ({v_min+step:.0f} THRU {v_min+2*step:.0f}=2) "
+                                 f"({v_min+2*step:.0f} THRU {v_min+3*step:.0f}=3) ({v_min+3*step:.0f} THRU {v_min+4*step:.0f}=4) "
                                  f"(HI=5) INTO {v}_CL.")
                     syntax.append(f"FREQUENCIES VARIABLES={v}_CL /FORMAT=NOTABLE.")
 
-        # --- Hypothesis Testing (T-Test & ANOVA) ---
-        elif any(word in q_low for word in ["test", "difference", "hypothesis"]):
-            if "35000" in q_low and found_vars:
-                syntax.append(f"T-TEST /TESTVAL=35000 /VARIABLES={found_vars[0]}.")
-            elif "region" in q_low or "race" in q_low:
-                dep = found_vars[0] if found_vars else "x3"
-                factor = "x4" if "region" in q_low else "x2"
-                syntax.append(f"ONEWAY {dep} BY {factor} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
+        # D. Normality & Outliers
+        elif "normality" in q_low or "outliers" in q_low:
+            target = vars_found[0] if vars_found else "x3"
+            syntax.append(f"EXAMINE VARIABLES={target} /PLOT BOXPLOT HISTOGRAM NPPLOT /STATISTICS DESCRIPTIVES.")
 
-        # --- Correlation and Regression ---
-        elif "correlation" in q_low:
-            if found_vars:
-                syntax.append(f"CORRELATIONS /VARIABLES={' '.join(found_vars)} /PRINT=TWOTAIL NOSIG.")
-        
+        # E. Hypothesis Testing (T-Test & ANOVA)
+        elif "test" in q_low or "difference" in q_low:
+            if "35000" in q_low:
+                syntax.append("T-TEST /TESTVAL=35000 /VARIABLES=x3.")
+            elif "45" in q_low:
+                syntax.append("TEMPORARY.\nSELECT IF (x4=1 OR x4=2).\nT-TEST /TESTVAL=45 /VARIABLES=x9.")
+            elif "region" in q_low or "race" in q_low:
+                # Decide ONEWAY ANOVA vs T-TEST
+                dep = next((v for v in vars_found if v in ['x3', 'x5', 'x8', 'x9']), "x3")
+                indep = next((v for v in vars_found if v != dep), "x4")
+                if indep in df.columns and df[indep].nunique() <= 2:
+                    syntax.append(f"T-TEST GROUPS={indep}(1 2) /VARIABLES={dep}.")
+                else:
+                    syntax.append(f"ONEWAY {dep} BY {indep} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
+
+        # F. Regression
         elif "regression" in q_low or "y =" in q_low:
-            syntax.append("REGRESSION /STATISTICS COEFF OUTS R ANOVA COLLIN /DEPENDENT x5 /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
+            syntax.append("REGRESSION /STATISTICS COEFF OUTS R ANOVA COLLIN /DEPENDENT x5")
+            syntax.append("  /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
 
         syntax.append("") # Spacer
         
-    syntax.append("\nEXECUTE.")
+    syntax.append("EXECUTE.")
     return "\n".join(syntax)
 
-# --- Streamlit Interface Setup ---
-st.set_page_config(page_title="SPSS Syntax Generator", layout="wide")
-st.title("🎓 Professional SPSS Syntax Generator (v26)")
-st.markdown("Automate your statistical analysis based on the MBA curriculum.")
+# --- Streamlit Interface ---
+st.set_page_config(page_title="SPSS Exam Engine", layout="wide")
+st.title("🎓 Professional SPSS Syntax Engine (v26)")
 
-# 1. Data Upload Section
-st.subheader("Step 1: Upload Data File")
-uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=['xlsx', 'xls', 'csv'])
+# File Upload
+st.subheader("Step 1: Upload Data Set (Excel/CSV)")
+uploaded_file = st.file_uploader("Upload file to calculate ranges and groups", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # Read the file into a DataFrame
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
-    
-    st.success("Data file loaded successfully!")
-    st.dataframe(df.head(3)) # Show preview of the first 3 rows
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+    st.success("File Loaded Successfully.")
 
-    # 2. Text Input Sections
     col1, col2 = st.columns(2)
     with col1:
-        st.info("Example format: x1 = gender / x3 = salary")
-        v_in = st.text_area("Step 2: Paste Variable Definitions (from 'Where' section):", height=250)
+        v_in = st.text_area("Step 2: Paste Variable Key (from 'Where' section):", height=250)
     with col2:
-        st.info("Paste the questions exactly as they appear in the exam.")
         q_in = st.text_area("Step 3: Paste Exam Questions:", height=250)
 
-    # 3. Generate Output
-    if st.button("Generate Final SPSS Syntax"):
+    if st.button("Generate Correct SPSS Solution"):
         if v_in and q_in:
-            final_output = generate_final_exam_syntax(df, v_in, q_in)
-            st.code(final_output, language='spss')
-            st.download_button(
-                label="Download .SPS File", 
-                data=final_output, 
-                file_name="SPSS_Analysis_Output.sps", 
-                mime="text/plain"
-            )
-        else:
-            st.warning("Please provide both variable definitions and questions.")
+            result = generate_curriculum_syntax(df, v_in, q_in)
+            st.code(result, language='spss')
+            st.download_button("Download .SPS File", result, "MBA_Solution.sps")
