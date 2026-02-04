@@ -1,110 +1,124 @@
 import streamlit as st
+import pandas as pd
 import re
+import numpy as np
 
-def generate_spss_syntax(variable_definitions, questions_text):
+def generate_smart_syntax(df, variable_defs, questions_text):
     syntax = ["* Encoding: UTF-8.", "SET DECIMAL=DOT.", ""]
     
-    # 1. Parsing Variable Definitions (Mapping)
-    var_map = {} # Mapping label -> variable name (e.g., 'salary': 'x3')
-    reverse_map = {} # Mapping variable name -> label
+    # 1. Map Variables from User Inputs & Data columns
+    var_map = {} # label -> var_name
+    reverse_map = {} # var_name -> label
     
-    lines = variable_definitions.split('\n')
+    # Extract labels from the "Where: X1=..." section
+    lines = variable_defs.split('\n')
     for line in lines:
-        # Regex to catch patterns like "X1 = Gender" or "X3: Salary"
         match = re.search(r'(\w+)\s*[=:-]\s*([^(\n]+)', line)
         if match:
-            var_name = match.group(1).strip().lower()
-            label = match.group(2).strip()
-            var_map[label.lower()] = var_name
-            reverse_map[var_name] = label
-            syntax.append(f"VARIABLE LABELS {var_name} '{label}'.")
+            v_name = match.group(1).strip().lower()
+            v_label = match.group(2).strip()
+            var_map[v_label.lower()] = v_name
+            reverse_map[v_name] = v_label
+            syntax.append(f"VARIABLE LABELS {v_name} '{v_label}'.")
 
     syntax.append("EXECUTE.\n")
 
-    # 2. Parsing Questions
+    # 2. Process Questions using Data Intelligence
     questions = questions_text.split('\n')
     for q in questions:
         q_low = q.lower()
         if not q_low.strip(): continue
-        
         syntax.append(f"* QUESTION: {q.strip()}")
+
+        # Find which variables from our data are mentioned in this question
+        mentioned_vars = []
+        for label, v_code in var_map.items():
+            if label in q_low or v_code in q_low:
+                mentioned_vars.append(v_code)
         
-        # --- DESCRIPTIVE STATISTICS (Chapter 2) ---
-        if any(word in q_low for word in ["frequency table", "distribution"]):
-            vars_to_use = [v for label, v in var_map.items() if label in q_low]
-            if vars_to_use:
-                syntax.append(f"FREQUENCIES VARIABLES={' '.join(vars_to_use)} /FORMAT=NOTABLE.")
-        
-        elif any(word in q_low for word in ["mean", "median", "mode", "standard deviation", "min", "max"]):
-            vars_to_use = [v for label, v in var_map.items() if label in q_low]
-            if vars_to_use:
-                syntax.append(f"FREQUENCIES VARIABLES={' '.join(vars_to_use)} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
+        # --- A. RECODE / Classes (Chapter 2) ---
+        if "classes" in q_low or "frequency table" in q_low:
+            for v in mentioned_vars:
+                if v in df.columns:
+                    # Calculate 5 classes automatically
+                    v_min, v_max = df[v].min(), df[v].max()
+                    step = (v_max - v_min) / 5
+                    bins = [v_min + i*step for i in range(6)]
+                    recode_cmd = f"RECODE {v} (LO THRU {bins[1]:.1f}=1) ({bins[1]:.1f} THRU {bins[2]:.1f}=2) " \
+                                 f"({bins[2]:.1f} THRU {bins[3]:.1f}=3) ({bins[3]:.1f} THRU {bins[4]:.1f}=4) " \
+                                 f"({bins[4]:.1f} THRU HI=5) INTO {v}_CL."
+                    syntax.append(recode_cmd)
+                    syntax.append(f"FREQUENCIES VARIABLES={v}_CL /FORMAT=NOTABLE.")
 
-        # --- GRAPHING (Chapter 2) ---
-        elif "bar chart" in q_low:
-            # Case: Average X by Y
-            avg_match = re.search(r"average\s+([\w\s]+)\s+for\s+([\w\s]+)", q_low)
-            if avg_match:
-                target_var = next((v for label, v in var_map.items() if label in avg_match.group(1)), "VAR_X")
-                group_var = next((v for label, v in var_map.items() if label in avg_match.group(2)), "VAR_Y")
-                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({target_var}) BY {group_var}.")
-            else:
-                target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
-                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {target_var}.")
+        # --- B. Descriptive Stats (Chapter 2) ---
+        elif any(word in q_low for word in ["mean", "median", "mode", "standard deviation"]):
+            if mentioned_vars:
+                syntax.append(f"FREQUENCIES VARIABLES={' '.join(mentioned_vars)} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
 
-        # --- NORMALITY & OUTLIERS (Chapter 2 & 7) ---
-        elif any(word in q_low for word in ["normality", "outliers", "extreme", "empirical rule"]):
-            target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
-            syntax.append(f"EXAMINE VARIABLES={target_var} /PLOT BOXPLOT NPPLOT /STATISTICS DESCRIPTIVES.")
-
-        # --- HYPOTHESIS TESTING (Chapter 4, 5, 6) ---
-        elif "test the hypothesis" in q_low or "significant difference" in q_low:
-            # One Sample T-Test (Equal to value)
+        # --- C. Hypothesis Testing (Chapters 4, 6) ---
+        elif "test the hypothesis" in q_low or "difference" in q_low:
+            # One Sample T-test
             val_match = re.search(r"(?:equal|is)\s*(?:\$|)\s*(\d+)", q_low)
-            if val_match:
-                target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
-                syntax.append(f"T-TEST /TESTVAL={val_match.group(1)} /VARIABLES={target_var}.")
+            if val_match and mentioned_vars:
+                syntax.append(f"T-TEST /TESTVAL={val_match.group(1)} /VARIABLES={mentioned_vars[0]}.")
             
-            # Independent T-test (2 groups) vs ANOVA (>2 groups)
-            elif "between" in q_low:
-                vars_in_q = [v for label, v in var_map.items() if label in q_low]
-                if len(vars_in_q) >= 2:
-                    # Logic: If question mentions specific categories, use T-test or ANOVA
-                    syntax.append(f"ONEWAY {vars_in_q[0]} BY {vars_in_q[1]} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
+            # Independent Groups (T-test vs ANOVA)
+            elif "between" in q_low and len(mentioned_vars) >= 2:
+                dep_var = mentioned_vars[0]
+                group_var = mentioned_vars[1]
+                # Intelligence: Check number of unique values in grouping variable
+                unique_vals = df[group_var].dropna().unique()
+                if len(unique_vals) == 2:
+                    syntax.append(f"T-TEST GROUPS={group_var}({int(min(unique_vals))} {int(max(unique_vals))}) /VARIABLES={dep_var}.")
+                else:
+                    syntax.append(f"ONEWAY {dep_var} BY {group_var} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
 
-        # --- CORRELATION (Chapter 8) ---
-        elif "correlation" in q_low:
-            vars_in_q = [v for label, v in var_map.items() if label in q_low]
-            if len(vars_in_q) >= 2:
-                syntax.append(f"CORRELATIONS /VARIABLES={' '.join(vars_in_q)} /PRINT=TWOTAIL NOSIG.")
-
-        # --- REGRESSION (Chapter 9 & 10) ---
+        # --- D. Regression & Correlation (Chapters 8, 9, 10) ---
         elif "regression" in q_low or "y =" in q_low:
-            dep_var = next((v for label, v in var_map.items() if "happiness" in label or "y" in label or "dependent" in q_low), "Y_VAR")
-            indep_vars = [v for v in reverse_map.keys() if v != dep_var]
-            syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT {dep_var} /METHOD=ENTER {' '.join(indep_vars)}.")
+            if len(mentioned_vars) > 1:
+                dep = mentioned_vars[0]
+                indeps = " ".join(mentioned_vars[1:])
+                syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT {dep} /METHOD=ENTER {indeps}.")
+        
+        elif "correlation" in q_low:
+            if len(mentioned_vars) >= 2:
+                syntax.append(f"CORRELATIONS /VARIABLES={' '.join(mentioned_vars)} /PRINT=TWOTAIL NOSIG.")
 
         syntax.append("") # Spacer
-        
+    
     syntax.append("EXECUTE.")
     return "\n".join(syntax)
 
 # Streamlit UI
-st.title("SPSS Exam Syntax Generator (Dr. Mohamed A. Salam Curriculum)")
-st.subheader("تحويل أسئلة المنهج إلى كود SPSS Syntax")
+st.set_page_config(page_title="SPSS Smart Analyzer", layout="wide")
+st.title("🎓 SPSS Smart Syntax Generator")
+st.write("ارفع ملف البيانات، ضع الأسئلة، واحصل على الحل جاهزاً لبرنامج SPSS")
 
-col1, col2 = st.columns(2)
-with col1:
-    var_input = st.text_area("1. ضع تعريف المتغيرات هنا (من قسم Where):", 
-                             placeholder="X1 = Gender\nX2 = Race\nX3 = Salary...")
-with col2:
-    ques_input = st.text_area("2. ضع أسئلة الامتحان هنا:", 
-                              placeholder="Test the hypothesis that average salary is 35000\nDraw a bar chart for average salary by region...")
+# 1. File Upload
+uploaded_file = st.file_uploader("اختر ملف البيانات (Excel or CSV)", type=['csv', 'xlsx', 'xls'])
 
-if st.button("توليد الكود (Generate Syntax)"):
-    if var_input and ques_input:
-        result = generate_spss_syntax(var_input, ques_input)
-        st.code(result, language='spss')
-        st.download_button("تحميل ملف Syntax", result, file_name="analysis.sps")
+if uploaded_file:
+    # Load data
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
     else:
-        st.error("الرجاء إدخال المتغيرات والأسئلة معاً.")
+        df = pd.read_excel(uploaded_file)
+    
+    st.success(f"تم تحميل الملف بنجاح! يحتوي على {df.shape[1]} أعمدة.")
+    st.dataframe(df.head(3)) # Show preview
+
+    # 2. Input Fields
+    col1, col2 = st.columns(2)
+    with col1:
+        var_input = st.text_area("أدخل تعريفات المتغيرات (مثال: X1=Gender):", height=200)
+    with col2:
+        ques_input = st.text_area("أدخل أسئلة الامتحان هنا:", height=200)
+
+    # 3. Generate
+    if st.button("توليد الحل الإحصائي"):
+        if var_input and ques_input:
+            syntax_code = generate_smart_syntax(df, var_input, ques_input)
+            st.text_area("SPSS Syntax Output:", syntax_code, height=400)
+            st.download_button("Download .SPS File", syntax_code, file_name="Exam_Solution.sps")
+        else:
+            st.warning("يرجى ملء صناديق النصوص لتوليد الكود.")
