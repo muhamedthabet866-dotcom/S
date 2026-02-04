@@ -1,97 +1,110 @@
 import streamlit as st
-import pandas as pd
-from docx import Document
 import re
-import io
 
-# دالة التحليل الذكي للسؤال بناءً على المنهج الشامل
-def intelligent_spss_engine(doc_upload):
-    doc_bytes = doc_upload.read()
-    try:
-        doc = Document(io.BytesIO(doc_bytes))
-        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    except:
-        paragraphs = re.findall(r'[ -~]{5,}', doc_bytes.decode('ascii', errors='ignore'))
-
-    mapping = {}
-    for p in paragraphs:
-        match = re.search(r"([Xx]\d+)\s*=\s*([^(\n\r.]+)", p, re.IGNORECASE)
-        if match:
-            mapping[match.group(1).upper()] = match.group(2).strip()
-
-    syntax = ["* Encoding: UTF-8.\n"]
-    for var, lbl in mapping.items():
-        syntax.append(f"VARIABLE LABELS {var} '{lbl}'.")
+def generate_spss_syntax(variable_definitions, questions_text):
+    syntax = ["* Encoding: UTF-8.", "SET DECIMAL=DOT.", ""]
     
-    syntax.append("SET DECIMAL=DOT.\n")
+    # 1. Parsing Variable Definitions (Mapping)
+    var_map = {} # Mapping label -> variable name (e.g., 'salary': 'x3')
+    reverse_map = {} # Mapping variable name -> label
+    
+    lines = variable_definitions.split('\n')
+    for line in lines:
+        # Regex to catch patterns like "X1 = Gender" or "X3: Salary"
+        match = re.search(r'(\w+)\s*[=:-]\s*([^(\n]+)', line)
+        if match:
+            var_name = match.group(1).strip().lower()
+            label = match.group(2).strip()
+            var_map[label.lower()] = var_name
+            reverse_map[var_name] = label
+            syntax.append(f"VARIABLE LABELS {var_name} '{label}'.")
 
-    for p in paragraphs:
-        p_low = p.lower()
-        if re.search(r"X\d+\s*=", p): continue
+    syntax.append("EXECUTE.\n")
+
+    # 2. Parsing Questions
+    questions = questions_text.split('\n')
+    for q in questions:
+        q_low = q.lower()
+        if not q_low.strip(): continue
         
-        # ربط المتغيرات الموجودة في السؤال
-        found_vars = [v for v in mapping.keys() if v in p.upper() or mapping.get(v, "").lower()[:10] in p_low]
-        found_vars = list(dict.fromkeys(found_vars))
+        syntax.append(f"* QUESTION: {q.strip()}")
         
-        syntax.append(f"\n* QUESTION: {p}.")
-
-        # --- المحرك الذكي لاختيار الاختبار (Selection Logic) ---
+        # --- DESCRIPTIVE STATISTICS (Chapter 2) ---
+        if any(word in q_low for word in ["frequency table", "distribution"]):
+            vars_to_use = [v for label, v in var_map.items() if label in q_low]
+            if vars_to_use:
+                syntax.append(f"FREQUENCIES VARIABLES={' '.join(vars_to_use)} /FORMAT=NOTABLE.")
         
-        # 1. اختبارات الفرضيات (T-Test & ANOVA) - فصول 4، 5، 6
-        if any(w in p_low for w in ["test", "difference", "significant", "hypothesis", "impact"]):
-            if "gender" in p_low or "two groups" in p_low or "independent" in p_low:
-                syntax.append(f"T-TEST GROUPS=X4(0 1) /VARIABLES=X1 X3 /CRITERIA=CI(.95).")
-            elif "before" in p_low and "after" in p_low:
-                syntax.append("T-TEST PAIRS=BEFORE WITH AFTER (PAIRED) /CRITERIA=CI(.95) /MISSING=ANALYSIS.")
-            elif "anova" in p_low or "more than two" in p_low or "city" in p_low:
-                syntax.append(f"ONEWAY X1 X3 BY X6 /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).")
+        elif any(word in q_low for word in ["mean", "median", "mode", "standard deviation", "min", "max"]):
+            vars_to_use = [v for label, v in var_map.items() if label in q_low]
+            if vars_to_use:
+                syntax.append(f"FREQUENCIES VARIABLES={' '.join(vars_to_use)} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.")
 
-        # 2. الارتباط والانحدار - فصول 8، 9، 10
-        elif "regression" in p_low or "y =" in p_low or "predict" in p_low:
-            syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT X1 /METHOD=ENTER {' '.join([v for v in mapping.keys() if v != 'X1'])}.")
-        elif "correlation" in p_low:
-            syntax.append(f"CORRELATIONS /VARIABLES={' '.join(found_vars) if len(found_vars)>1 else 'X1 X2 X3'} /PRINT=TWOTAIL NOSIG.")
-
-        # 3. الإحصاء الوصفي والرسوم - فصول 1، 2
-        elif "frequency table" in p_low:
-            if "classes" in p_low or "k rule" in p_low:
-                target = found_vars[0] if found_vars else "X1"
-                syntax.append(f"RECODE {target} (LO thru HI=COPY) INTO {target}_CL.\nFREQUENCIES VARIABLES={target}_CL /FORMAT=NOTABLE.")
+        # --- GRAPHING (Chapter 2) ---
+        elif "bar chart" in q_low:
+            # Case: Average X by Y
+            avg_match = re.search(r"average\s+([\w\s]+)\s+for\s+([\w\s]+)", q_low)
+            if avg_match:
+                target_var = next((v for label, v in var_map.items() if label in avg_match.group(1)), "VAR_X")
+                group_var = next((v for label, v in var_map.items() if label in avg_match.group(2)), "VAR_Y")
+                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({target_var}) BY {group_var}.")
             else:
-                syntax.append(f"FREQUENCIES VARIABLES={' '.join(found_vars) if found_vars else 'X4 X5 X6'}.")
+                target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
+                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {target_var}.")
+
+        # --- NORMALITY & OUTLIERS (Chapter 2 & 7) ---
+        elif any(word in q_low for word in ["normality", "outliers", "extreme", "empirical rule"]):
+            target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
+            syntax.append(f"EXAMINE VARIABLES={target_var} /PLOT BOXPLOT NPPLOT /STATISTICS DESCRIPTIVES.")
+
+        # --- HYPOTHESIS TESTING (Chapter 4, 5, 6) ---
+        elif "test the hypothesis" in q_low or "significant difference" in q_low:
+            # One Sample T-Test (Equal to value)
+            val_match = re.search(r"(?:equal|is)\s*(?:\$|)\s*(\d+)", q_low)
+            if val_match:
+                target_var = next((v for label, v in var_map.items() if label in q_low), "VAR")
+                syntax.append(f"T-TEST /TESTVAL={val_match.group(1)} /VARIABLES={target_var}.")
+            
+            # Independent T-test (2 groups) vs ANOVA (>2 groups)
+            elif "between" in q_low:
+                vars_in_q = [v for label, v in var_map.items() if label in q_low]
+                if len(vars_in_q) >= 2:
+                    # Logic: If question mentions specific categories, use T-test or ANOVA
+                    syntax.append(f"ONEWAY {vars_in_q[0]} BY {vars_in_q[1]} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
+
+        # --- CORRELATION (Chapter 8) ---
+        elif "correlation" in q_low:
+            vars_in_q = [v for label, v in var_map.items() if label in q_low]
+            if len(vars_in_q) >= 2:
+                syntax.append(f"CORRELATIONS /VARIABLES={' '.join(vars_in_q)} /PRINT=TWOTAIL NOSIG.")
+
+        # --- REGRESSION (Chapter 9 & 10) ---
+        elif "regression" in q_low or "y =" in q_low:
+            dep_var = next((v for label, v in var_map.items() if "happiness" in label or "y" in label or "dependent" in q_low), "Y_VAR")
+            indep_vars = [v for v in reverse_map.keys() if v != dep_var]
+            syntax.append(f"REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT {dep_var} /METHOD=ENTER {' '.join(indep_vars)}.")
+
+        syntax.append("") # Spacer
         
-        elif "bar chart" in p_low:
-            if "average" in p_low or "mean" in p_low:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6.")
-            else:
-                syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0] if found_vars else 'X5'}.")
-
-        elif "confidence interval" in p_low:
-            for val in ["95", "99"]:
-                syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars) if found_vars else 'X1'} /STATISTICS DESCRIPTIVES /CINTERVAL {val} /PLOT NONE.")
-
-        # 4. التوزيع الطبيعي والقيم الشاذة - فصل 2
-        elif "normality" in p_low or "normality test" in p_low:
-            syntax.append(f"EXAMINE VARIABLES={' '.join(found_vars) if found_vars else 'X1'} /PLOT NPPLOT /STATISTICS DESCRIPTIVES.")
-        elif "outliers" in p_low:
-            syntax.append(f"EXAMINE VARIABLES={found_vars[0] if found_vars else 'X1'} /PLOT BOXPLOT /EXTREME(5).")
-
-    syntax.append("\nEXECUTE.")
+    syntax.append("EXECUTE.")
     return "\n".join(syntax)
 
-# واجهة المستخدم
-st.set_page_config(page_title="SPSS Master Engine v40", layout="wide")
-st.title("🤖 المحلل الإحصائي الذكي الشامل للمهندس محمد")
-st.write("هذا المحرك مبرمج بناءً على الفصول العشرة للمنهج ليحل أي بيانات إحصائية.")
+# Streamlit UI
+st.title("SPSS Exam Syntax Generator (Dr. Mohamed A. Salam Curriculum)")
+st.subheader("تحويل أسئلة المنهج إلى كود SPSS Syntax")
 
-u_excel = st.file_uploader("1. ارفع ملف البيانات (Excel/CSV)", type=['xlsx', 'xls', 'csv'])
-u_word = st.file_uploader("2. ارفع ملف الأسئلة (Word)", type=['docx', 'doc'])
+col1, col2 = st.columns(2)
+with col1:
+    var_input = st.text_area("1. ضع تعريف المتغيرات هنا (من قسم Where):", 
+                             placeholder="X1 = Gender\nX2 = Race\nX3 = Salary...")
+with col2:
+    ques_input = st.text_area("2. ضع أسئلة الامتحان هنا:", 
+                              placeholder="Test the hypothesis that average salary is 35000\nDraw a bar chart for average salary by region...")
 
-if u_excel and u_word:
-    try:
-        final_syntax = intelligent_spss_engine(u_word)
-        st.success("✅ تم تحليل الأسئلة وتوليد السينتاكس بناءً على منطق المنهج الكامل.")
-        st.code(final_syntax, language='spss')
-        st.download_button("تحميل السينتاكس النهائي (.sps)", final_syntax, "Master_Solution.sps")
-    except Exception as e:
-        st.error(f"حدث خطأ أثناء المعالجة: {e}")
+if st.button("توليد الكود (Generate Syntax)"):
+    if var_input and ques_input:
+        result = generate_spss_syntax(var_input, ques_input)
+        st.code(result, language='spss')
+        st.download_button("تحميل ملف Syntax", result, file_name="analysis.sps")
+    else:
+        st.error("الرجاء إدخال المتغيرات والأسئلة معاً.")
