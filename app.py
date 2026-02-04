@@ -2,113 +2,91 @@ import streamlit as st
 import pandas as pd
 import re
 
-def generate_full_curriculum_syntax(var_defs, questions_text):
-    # مابينج افتراضي للمتغيرات الشائعة في Data Set 4 و 3
-    smart_vars = {
-        "salary": "x3", "age": "x9", "children": "x8", "gender": "x1",
-        "race": "x2", "region": "x4", "happiness": "x5", "occupation": "x11",
-        "exciting": "x6", "brothers": "x7", "school": "x10", "problem": "x12"
-    }
-
-    syntax = [
-        "* Encoding: UTF-8.",
-        "* " + "="*70 + ".",
-        "* MBA COMPREHENSIVE STATISTICAL ANALYSIS - ALL CHAPTERS",
-        "* Prepared for: Dr. Mohamed A. Salam",
-        "* " + "="*70 + ".\n"
-    ]
-
-    # 1. معالجة التعريفات (Variable & Value Labels)
-    syntax.append("* --- [CHAPTER 1 & 2: DATA PREPARATION] --- .")
+# دالة توليد السينتاكس بناءً على المنهج [cite: 1-10]
+def generate_final_exam_syntax(df, var_defs, questions_text):
+    syntax = ["* Encoding: UTF-8.", "SET DECIMAL=DOT.", "* " + "="*65 + ".", "* SPSS Comprehensive Solution for MBA Exam", "* " + "="*65 + ".\n"]
+    
+    # 1. تعريف المتغيرات [cite: 18, 35, 45]
+    syntax.append("* --- [Chapter 1: Data Setup] --- .")
     var_map = {}
     lines = var_defs.split('\n')
-    
-    # استخراج أسماء المتغيرات والتسميات
     for line in lines:
         match = re.search(r'(x\d+)\s*[=:]\s*([^(\n\r]+)', line, re.IGNORECASE)
         if match:
             v_name = match.group(1).lower().strip()
             v_label = match.group(2).strip()
-            var_map[v_name] = v_label
+            var_map[v_label.lower()] = v_name
             syntax.append(f"VARIABLE LABELS {v_name} \"{v_label}\".")
+    syntax.append("EXECUTE.\n")
 
-    # إضافة Value Labels الشاملة للمنهج
-    syntax.append("\nVALUE LABELS x1 1 'Male' 2 'Female' /x2 1 'White' 2 'Black' 3 'Others'")
-    syntax.append("  /x4 1 'North East' 2 'South East' 3 'West' /x5 1 'Very Happy' 2 'Pretty Happy' 3 'Not Too Happy'")
-    syntax.append("  /x11 1 'Managerial' 2 'Technical' 3 'Farming' 4 'Service' 5 'Production' 6 'Marketing'.\nEXECUTE.\n")
-
-    # 2. محرك معالجة الأسئلة (Chapters 2 to 10)
+    # 2. تحليل الأسئلة [cite: 1-10]
     qs = questions_text.split('\n')
-    for i, q in enumerate(qs):
+    for q in qs:
         q_low = q.lower().strip()
-        if len(q_low) < 10 or "where:" in q_low: continue
+        if len(q_low) < 10: continue
+        syntax.append(f"* QUESTION: {q[:100]}")
 
-        syntax.append(f"* [Q] {q[:80]}...")
+        # البحث عن المتغيرات في السؤال [cite: 35, 45]
+        found_vars = [v for label, v in var_map.items() if label in q_low]
 
-        # --- الفصل 2: التكرارات والرسوم ---
-        if "frequency table" in q_low:
-            syntax.append("* Justification: Summarizing data distribution.")
-            if "categorical" in q_low:
-                syntax.append("FREQUENCIES VARIABLES=x1 x2 x4 x5 x11 /ORDER=ANALYSIS.")
-            else:
-                syntax.append("RECODE x3 (LO THRU 20000=1) (20001 THRU 40000=2) (40001 THRU 60000=3) (HI=4) INTO X3_CL.")
-                syntax.append("FREQUENCIES VARIABLES=X3_CL /FORMAT=AVALUE.")
+        # --- الرسوم البيانية [cite: 2, 5, 20, 23] ---
+        if "chart" in q_low:
+            if "bar chart" in q_low:
+                if "average" in q_low and len(found_vars) >= 2:
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({found_vars[0]}) BY {found_vars[1]}.")
+                elif found_vars:
+                    syntax.append(f"GRAPH /BAR(SIMPLE)=COUNT BY {found_vars[0]}.")
+            elif "pie chart" in q_low and found_vars:
+                syntax.append(f"GRAPH /PIE=COUNT BY {found_vars[0]}.")
 
-        # --- الفصل 2 & 4: الرسوم البيانية المتطورة ---
-        elif "bar chart" in q_low:
-            syntax.append("* Justification: Visual comparison of metrics.")
-            if "average" in q_low or "mean" in q_low:
-                dep = "x3" if "salary" in q_low else "x8"
-                indep = "x4" if "region" in q_low else "x1"
-                syntax.append(f"GRAPH /BAR(SIMPLE)=MEAN({dep}) BY {indep}.")
-            else:
-                syntax.append("GRAPH /BAR(SIMPLE)=COUNT BY x4.")
+        # --- التقسيم الفئوي الذكي (Chapter 2) [cite: 7, 26, 37] ---
+        elif "classes" in q_low or "continuous" in q_low:
+            for v in found_vars:
+                if v in df.columns:
+                    v_min, v_max = df[v].min(), df[v].max()
+                    step = (v_max - v_min) / 5
+                    syntax.append(f"* RECODE for {v} based on range: {v_min} to {v_max}[cite: 26].")
+                    syntax.append(f"RECODE {v} (LO THRU {v_min+step:.0f}=1) (HI=5) INTO {v}_CL.")
+                    syntax.append(f"FREQUENCIES VARIABLES={v}_CL /FORMAT=NOTABLE.")
 
-        # --- الفصل 4: التحليل الطبقي (Split File) ---
-        elif "each gender" in q_low or "each region" in q_low:
-            syntax.append("* Justification: Analyzing subgroups separately.")
-            syntax.append("SORT CASES BY x4 x1.\nSPLIT FILE LAYERED BY x4 x1.\nDESCRIPTIVES VARIABLES=x3 x9 /STATISTICS=MEAN STDDEV.\nSPLIT FILE OFF.")
+        # --- الاختبارات الإحصائية (Chapter 4, 6) [cite: 12, 14, 29, 30] ---
+        elif "test" in q_low or "difference" in q_low:
+            if "35000" in q_low and found_vars:
+                syntax.append(f"T-TEST /TESTVAL=35000 /VARIABLES={found_vars[0]}.")
+            elif "region" in q_low or "race" in q_low:
+                # إذا كانت البيانات المرفوعة بها أكثر من مجموعتين، نستخدم ANOVA [cite: 14, 16]
+                dep = found_vars[0] if found_vars else "x3"
+                factor = "x4" if "region" in q_low else "x2"
+                syntax.append(f"ONEWAY {dep} BY {factor} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
 
-        # --- الفصل 6: ANOVA ---
-        elif "difference" in q_low and ("region" in q_low or "race" in q_low):
-            syntax.append("* Justification: Testing differences across >2 groups (ANOVA).")
-            factor = "x4" if "region" in q_low else "x2"
-            syntax.append(f"ONEWAY x3 BY {factor} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.")
-
-        # --- الفصل 8: الارتباط (Correlation) ---
-        elif "correlation" in q_low:
-            if "happiness" in q_low or "occupation" in q_low:
-                syntax.append("* Justification: Spearman Rho for ordinal data.")
-                syntax.append("NONPAR CORR /VARIABLES=x5 x11 /PRINT=SPEARMAN.")
-            else:
-                syntax.append("CORRELATIONS /VARIABLES=x3 x9 /PRINT=TWOTAIL /METHOD=PEARSON.")
-
-        # --- الفصل 10: الانحدار المتعدد (Multiple Regression) ---
-        elif "regression" in q_low or "happiness" in q_low and "x1" in q_low:
-            syntax.append("* Justification: Measuring impact of multiple predictors on Y.")
-            syntax.append("REGRESSION /STATISTICS COEFF OUTS R ANOVA COLLIN /DEPENDENT x5")
-            syntax.append("  /METHOD=ENTER x1 x2 x3 x4 x6 x7 x8 x9 x10 x11 x12.")
-
-        syntax.append("") # سطر فارغ
-
-    syntax.append("EXECUTE.")
+    syntax.append("\nEXECUTE.")
     return "\n".join(syntax)
 
 # واجهة Streamlit
-st.set_page_config(page_title="SPSS All-in-One Engine", layout="wide")
-st.title("📊 محرك SPSS الشامل (المنهج كامل - Chapters 1-10)")
+st.set_page_config(page_title="SPSS Exam Pro", layout="wide")
+st.title("🎓 محرك حل امتحانات SPSS الشامل")
 
-col1, col2 = st.columns(2)
-with col1:
-    v_input = st.text_area("1. الصق تعريفات المتغيرات (مثل x1=gender):", height=300, 
-                          placeholder="X1 = Gender (1=Male, 2=Female)\nX2 = Race...")
-with col2:
-    q_input = st.text_area("2. الصق أسئلة الامتحان هنا:", height=300,
-                          placeholder="Construct the frequency table...\nDraw a bar chart for average salary...")
+# --- هذه هي الخانة التي كانت ناقصة ---
+st.subheader("1. خطوة رفع الملف (ضرورية لحساب الفئات والاختبارات)")
+uploaded_file = st.file_uploader("ارفع ملف الإكسيل (Excel or CSV)", type=['xlsx', 'xls', 'csv'])
 
-if st.button("توليد السينتاكس الشامل"):
-    if v_input and q_input:
-        final_code = generate_full_curriculum_syntax(v_input, q_input)
-        st.success("✅ تم تحليل الأسئلة وتوليد الكود لكل فصول المنهج!")
-        st.code(final_code, language='spss')
-        st.download_button("تحميل الملف .SPS", final_code, "MBA_Full_Analysis.sps")
+if uploaded_file:
+    # قراءة الملف
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+    
+    st.success("✅ تم تحميل الملف بنجاح.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        v_in = st.text_area("2. الصق تعريفات المتغيرات (Where: X1=...)", height=200)
+    with col2:
+        q_in = st.text_area("3. الصق أسئلة الامتحان هنا:", height=200)
+
+    if st.button("توليد الحل الإحصائي"):
+        if v_in and q_in:
+            code = generate_final_exam_syntax(df, v_in, q_in)
+            st.code(code, language='spss')
+            st.download_button("تحميل الملف .SPS", code, "Exam_Solution.sps")
