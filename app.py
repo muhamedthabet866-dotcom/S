@@ -1,57 +1,88 @@
 import streamlit as st
 import pandas as pd
 import re
+import math
 
-# تحميل القواعد من ملفك (تم دمج المنطق يدوياً لضمان السرعة)
-STRATEGIES = {
-    "k-rule": "RECODE {var} (LO THRU {low}=1) ({low}.01 THRU {mid}=2) ({mid}.01 THRU HI=3) INTO {var}_cat.\nVALUE LABELS {var}_cat 1 'Low' 2 'Mid' 3 'High'.\nFREQUENCIES VARIABLES={var}_cat /FORMAT=AVALUE.",
-    "descriptive": "FREQUENCIES VARIABLES={vars} /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE SKEWNESS /FORMAT=NOTABLE.",
-    "normality": "EXAMINE VARIABLES={var} /PLOT NPPLOT /STATISTICS DESCRIPTIVES.\n* Note: If p > 0.05, data is normal (Empirical Rule).",
-    "anova": "ONEWAY {num_var} BY {cat_var} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY ALPHA(0.05).",
-    "regression": "REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /DEPENDENT={dep} /METHOD=ENTER {indep}.",
-    "correlation": "CORRELATIONS /VARIABLES={vars} /PRINT=TWOTAIL NOSIG."
-}
-
-def generate_perfect_syntax_from_file(df, var_defs, questions_text):
-    # بناء الـ Mapping
-    var_map = {}
-    lines = var_defs.split('\n')
-    for line in lines:
-        match = re.search(r'(x\d+)\s*[=:]\s*([^(\n\r]+)', line, re.IGNORECASE)
-        if match:
-            v_code = match.group(1).strip().upper()
-            v_label = match.group(2).strip().lower()
-            var_map[v_label] = v_code
-
-    syntax = ["* Encoding: UTF-8.\nTITLE 'Automated Solution based on Logic File'.\n"]
+# 1. محرك الذكاء الإحصائي: يربط الكلمات المفتاحية بأوامر SPSS v26
+def get_statistical_logic(q_text, var_map, n_size):
+    q_low = q_text.lower()
+    k_rule = math.ceil(1 + 3.322 * math.log10(n_size)) if n_size > 0 else 7
     
-    # تقسيم الأسئلة والتحليل
-    questions = re.split(r'\n\s*\d+[\.\)]', questions_text)
-    for q in questions:
-        q_low = q.lower().strip()
-        if not q_low: continue
+    # استخراج المتغيرات المذكورة في السؤال بناءً على الـ Mapping
+    found_vars = [code for label, code in var_map.items() if label in q_low]
+    v1 = found_vars[0] if found_vars else "X1"
+    v_all = " ".join(found_vars) if found_vars else "X1 X2 X3"
+
+    # تطبيق القواعد البرمجية (Logic من ملف الإكسيل الخاص بك)
+    if any(w in q_low for w in ["frequency", "classes", "k-rule"]):
+        if "balance" in q_low or "salary" in q_low or "x3" in q_low:
+            return f"RECODE {v1} (LO THRU 30000=1) (30000.01 THRU 60000=2) (60000.01 THRU HI=3) INTO {v1}_cat.\nFREQUENCIES VARIABLES={v1}_cat /FORMAT=AVALUE."
+        return f"FREQUENCIES VARIABLES={v_all} /ORDER=ANALYSIS."
+
+    if any(w in q_low for w in ["mean", "median", "mode", "descriptive"]):
+        return f"FREQUENCIES VARIABLES={v_all} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX SKEWNESS /FORMAT=NOTABLE."
+
+    if "bar chart" in q_low:
+        if "average" in q_low: return f"GRAPH /BAR(SIMPLE)=MEAN({v1}) BY X4."
+        if "max" in q_low: return f"GRAPH /BAR(SIMPLE)=MAX({v1}) BY X4."
+        return f"GRAPH /BAR(SIMPLE)=COUNT BY {v1}."
+
+    if "pie chart" in q_low:
+        return f"GRAPH /PIE=PCT BY {v1}."
+
+    if "histogram" in q_low:
+        return f"GRAPH /HISTOGRAM={v1}."
+
+    if any(w in q_low for w in ["normality", "empirical", "chebycheve", "outliers"]):
+        return f"EXAMINE VARIABLES={v1} /PLOT BOXPLOT NPPLOT /STATISTICS DESCRIPTIVES.\n* ECHO 'Sig > 0.05: Empirical Rule | Sig < 0.05: Chebyshev'."
+
+    if "regression" in q_low or "model" in q_low:
+        return "REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT X5 /METHOD=ENTER X1 X2 X3 X4 X6 X7 X8 X9 X10 X11 X12."
+
+    if "correlation" in q_low:
+        return f"CORRELATIONS /VARIABLES={v_all} /PRINT=TWOTAIL."
+
+    if "each" in q_low or "compare" in q_low:
+        return f"SORT CASES BY X4 X1.\nSPLIT FILE SEPARATE BY X4 X1.\nDESCRIPTIVES VARIABLES={v_all}.\nSPLIT FILE OFF."
+
+    return "* [Manual Check Required for this Task]"
+
+# 2. واجهة المستخدم باستخدام Streamlit
+st.set_page_config(page_title="MBA SPSS Genius Solver", layout="wide")
+st.title("🚀 محرك حل امتحانات SPSS العبقري")
+st.write("ارفع ملف الداتا والصق الأسئلة، وسأقوم بتوليد كود الحل فوراً بناءً على قواعد المنهج.")
+
+# مدخلات المستخدم
+with st.sidebar:
+    st.header("1. البيانات")
+    uploaded_file = st.file_uploader("ارفع ملف الإكسيل", type=['csv', 'xlsx'])
+    
+v_mapping = st.text_area("2. تعريف المتغيرات (مثال: x1=gender)", "x1=gender\nx2=race\nx3=salary\nx4=region\nx5=happiness\nx9=age", height=150)
+questions_input = st.text_area("3. الصق نص الأسئلة بالكامل هنا", height=250)
+
+if st.button("🚀 توليد الحل النهائي"):
+    if v_mapping and questions_input:
+        # معالجة الـ Mapping
+        var_map = {}
+        for line in v_mapping.split('\n'):
+            if '=' in line:
+                c, l = line.split('=')
+                var_map[l.strip().lower()] = c.strip().upper()
+
+        # معالجة البيانات
+        n_size = 60
+        if uploaded_file:
+            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
+            n_size = len(df)
+
+        # تقسيم الأسئلة وتوليد الكود
+        final_syntax = ["* Encoding: UTF-8.\nSET SEED=1234567.\n"]
+        questions_list = re.split(r'\n\s*\d+[\.\)]', questions_input)
         
-        # استخراج المتغيرات المذكورة
-        found = [code for label, code in var_map.items() if label in q_low]
-        v1 = found[0] if found else "X1"
-        v_list = " ".join(found) if found else "X1 X2 X3"
+        for i, q in enumerate(questions_list):
+            if len(q.strip()) < 5: continue
+            logic = get_statistical_logic(q, var_map, n_size)
+            final_syntax.append(f"TITLE 'QUESTION {i}: Analysis'.\nECHO 'Task: {q.strip()[:50]}...'.\n{logic}\nEXECUTE.")
 
-        # تطبيق استراتيجيات ملفك الإكسيل
-        if "frequency" in q_low or "classes" in q_low:
-            syntax.append(STRATEGIES["k-rule"].format(var=v1, low=500, mid=1500))
-        elif "mean" in q_low or "median" in q_low:
-            syntax.append(STRATEGIES["descriptive"].format(vars=v_list))
-        elif "difference" in q_low or "compare" in q_low:
-            syntax.append(STRATEGIES["anova"].format(num_var="X3", cat_var="X4"))
-        elif "regression" in q_low or "predict" in q_low:
-            indep = " ".join([v for v in found if v != "X5"])
-            syntax.append(STRATEGIES["regression"].format(dep="X5", indep=indep))
-        elif "normality" in q_low or "empirical" in q_low:
-            syntax.append(STRATEGIES["normality"].format(var=v1))
-
-    syntax.append("\nEXECUTE.")
-    return "\n".join(syntax)
-
-# واجهة Streamlit
-st.title("🚀 محرك SPSS العبقري (مدعوم بملف القواعد)")
-# ... (بقية واجهة المستخدم)
+        st.subheader("✅ كود SPSS Syntax المولد:")
+        st.code("\n\n".join(final_syntax), language="spss")
