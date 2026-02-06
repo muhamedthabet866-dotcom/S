@@ -18,7 +18,7 @@ def ultra_clean(text):
 
 # --- رابط المنهج من GitHub ---
 # تأكد من استخدام رابط الـ RAW للملف الذي أرفقته
-GITHUB_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/spss_rules.xlsx"
+GITHUB_URL = "https://github.com/muhamedthabet866-dotcom/S/raw/refs/heads/main/spss_rules.xlsx"
 
 @st.cache_data
 def load_rules(url):
@@ -101,3 +101,4 @@ if st.button("🚀 توليد الحل"):
         st.code("\n".join(final_syntax), language="spss")
     else:
         st.error("تأكد من الرابط وإدخال الأسئلة")
+
