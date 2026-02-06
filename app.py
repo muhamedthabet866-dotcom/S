@@ -1,57 +1,87 @@
 import streamlit as st
 import pandas as pd
-import re
+import requests
+from io import BytesIO
 
-st.set_page_config(page_title="SPSS Master Solver", layout="wide")
+# إعداد واجهة التطبيق
+st.set_page_config(page_title="MBA SPSS Master Solver", layout="wide")
 
-st.title("🚀 المحرك الذكي المطور (تعامل مع قوائم المتغيرات)")
+st.title("🎓 المحرك الذكي لتوليد SPSS Syntax")
+st.markdown("تحويل أسئلة الامتحانات إلى أكواد طبقاً لمنهج د. محمد عبد السلام")
 
-# --- الجانب الأيسر: الإعدادات ---
+# --- الإعدادات الجانبية ---
 with st.sidebar:
-    st.header("📂 1. البيانات والمرجع")
-    # ارفع ملف "SPSS_Master_Guide_Template.csv" الذي أنشأته لك
-    guide_file = st.file_uploader("ارفع ملف الدليل (Excel/CSV)", type=['csv', 'xlsx'])
+    st.header("📂 1. البيانات والمنهج")
+    # رفع ملف البيانات الأساسي (Data Set)
+    data_file = st.file_uploader("ارفع ملف بيانات الإكسيل (XLSX)", type=['xlsx'])
     
-    st.header("⚙️ 2. الـ Mapping (الربط)")
-    st.info("اكتب اسم المتغير في السؤال = اسمه في ملفك")
-    # هنا تضع المتغيرات المطلوبة في السؤال
-    v_mapping = st.text_area("مثال:\nVars=X2 X3 X4\nTarget=X1", 
-                               value="Vars=X2 X3 X4\nTarget=X1", height=150)
+    # رابط ملف المنهج من GitHub (قاعدة القواعد)
+    # ملاحظة: سأزودك بتنسيق هذا الملف لترفه على حسابك
+    RULES_URL = "https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/spss_rules.xlsx"
+    st.info("سيتم جلب قواعد المنهج تلقائياً من GitHub")
 
-# تحويل الـ Mapping لقاموس
-mapping_dict = {}
-for line in v_mapping.split('\n'):
-    if '=' in line:
-        k, v = line.split('=')
-        mapping_dict[k.strip()] = v.strip()
+# --- الصناديق الحوارية المطلوبة ---
+col1, col2 = st.columns(2)
 
-# --- الجانب الأيمن: حل الأسئلة ---
-st.header("📝 خطوة 3: الصق سؤال الامتحان")
-q_input = st.text_area("مثال: Construct a frequency table for debit card, interest, and city", height=150)
+with col1:
+    st.subheader("⚙️ صندوق المتغيرات (Mapping)")
+    v_mapping = st.text_area(
+        "أدخل تعريف المتغيرات كما في الامتحان:",
+        placeholder="X1=Team\nX2=League\nX5=Salary...",
+        height=300
+    )
 
-if st.button("🚀 توليد كود SPSS الآن"):
-    if guide_file and q_input:
-        # قراءة الدليل
-        df_guide = pd.read_csv(guide_file) if guide_file.name.endswith('csv') else pd.read_excel(guide_file)
-        
-        # البحث عن الكلمة المفتاحية في السؤال
-        found = False
-        for _, row in df_guide.iterrows():
-            keyword = str(row['Keyword']).lower()
-            if keyword in q_input.lower():
-                syntax = str(row['Syntax'])
-                
-                # استبدال الـ Placeholders بالقيم من الـ Mapping
-                # هذا الجزء سيبدل [Vars] بـ X2 X3 X4 دفعة واحدة
-                for key, val in mapping_dict.items():
-                    syntax = syntax.replace(f"[{key}]", val)
-                
-                st.success(f"✅ تم اكتشاف نوع التحليل: {row['Category']}")
-                st.code(f"* Solution for: {keyword}\n" + syntax + "\nEXECUTE.", language="spss")
-                found = True
-                break
-        
-        if not found:
-            st.error("❌ لم أجد كلمة مفتاحية في الدليل تطابق سؤالك. يرجى إضافة 'frequency' في ملف الدليل.")
-    else:
-        st.warning("يرجى رفع ملف الدليل وكتابة السؤال.")
+with col2:
+    st.subheader("📝 صندوق أسئلة الامتحان")
+    questions_input = st.text_area(
+        "الصق الأسئلة هنا (مثال: Draw a bar chart for average salary):",
+        height=300
+    )
+
+# --- محرك التحليل والمقارنة ---
+def generate_syntax(questions, mapping, rules_df):
+    syntax_output = []
+    # تحويل الـ Mapping إلى قاموس ليسهل استبداله
+    mapping_dict = {}
+    for line in mapping.split('\n'):
+        if '=' in line:
+            parts = line.split('=')
+            mapping_dict[parts[1].strip().lower()] = parts[0].strip().upper()
+
+    # تقسيم الأسئلة ومعالجتها
+    for q in questions.split('\n'):
+        if q.strip():
+            found = False
+            # مقارنة السؤال مع ملف المنهج (Rules)
+            for _, rule in rules_df.iterrows():
+                if rule['Keyword'].lower() in q.lower():
+                    # استخراج الكود من المنهج وتعبئته بالمتغيرات الصحيحة
+                    template = rule['Syntax_Template']
+                    # منطق لاستبدال الكلمات بالرموز (مثل Salary بـ X5)
+                    for word, code in mapping_dict.items():
+                        if word in q.lower():
+                            template = template.replace(f"{{var}}", code)
+                    
+                    syntax_output.append(f"* Question: {q}\n{template}\n")
+                    found = True
+                    break
+            if not found:
+                syntax_output.append(f"* Question: {q}\n* [Manual Check Required - No Rule Matched]\n")
+    
+    return "\n".join(syntax_output)
+
+if st.button("🚀 توليد كود Syntax المنهج"):
+    if v_mapping and questions_input:
+        try:
+            # جلب ملف المنهج من GitHub
+            response = requests.get(RULES_URL)
+            rules_df = pd.read_excel(BytesIO(response.content))
+            
+            # توليد الكود
+            final_code = generate_syntax(questions_input, v_mapping, rules_df)
+            
+            st.success("تم توليد الكود بنجاح!")
+            st.code(final_code, language="spss")
+            
+        except Exception as e:
+            st.error(f"يرجى التأكد من رفع ملف المنهج على GitHub بشكل صحيح. الخطأ: {e}")
