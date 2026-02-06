@@ -9,7 +9,7 @@ st.set_page_config(page_title="SPSS MBA Solver", layout="wide")
 st.title("🚀 المحرك الذكي لمنهج SPSS")
 
 # --- الإعدادات وجلب المنهج من GitHub ---
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/spss_rules.xlsx"
+GITHUB_RAW_URL = "https://github.com/muhamedthabet866-dotcom/S/raw/refs/heads/main/spss_rules.xlsx"
 
 @st.cache_data
 def load_rules(url):
@@ -72,3 +72,4 @@ if st.button("🚀 توليد الحل الكامل"):
         st.code("\n".join(final_syntax), language="spss")
     else:
         st.error("فشل في جلب ملف المنهج من GitHub. تأكد من الرابط.")
+
