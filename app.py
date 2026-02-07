@@ -8,72 +8,46 @@ import math
 st.set_page_config(page_title="MBA SPSS Genius", layout="wide", page_icon="🎓")
 
 st.title("🎓 المهندس محمد - المحرك الذكي لـ SPSS (MBA Edition)")
-st.markdown("""
-### 🚀 المميزات:
-1. **يعمل بملف القواعد:** يقرأ أوامر المنهج من ملف Excel/CSV خارجي.
-2. **تحليل ذكي:** يستبدل الرموز {var}, {group} بأسماء الأعمدة تلقائياً.
-3. **مرونة:** عدل ملف القواعد وسيتم تحديث البرنامج فوراً.
-""")
 
 # --- 1. دوال مساعدة (Helpers) ---
-
-def determine_measure(series):
-    """تحديد نوع المتغير: Scale أو Nominal"""
-    if pd.api.types.is_numeric_dtype(series):
-        if series.nunique() < 15 and pd.api.types.is_integer_dtype(series): 
-            return "Nominal"
-        return "Scale"
-    return "Nominal"
-
-def sturges_rule(n):
-    if n <= 0: return 5
-    return math.ceil(1 + 3.322 * math.log10(n))
-
 def fill_template(template, found_vars):
-    """
-    دالة ذكية لملء الفراغات في كود الـ SPSS القادم من ملف القواعد
-    {var} -> يضع كل المتغيرات
-    {group} -> يضع متغير اسمي (Nominal)
-    {y} -> يضع المتغير التابع (أول متغير Scale)
-    {x_list} -> يضع باقي المتغيرات المستقلة
-    """
+    """ملء القالب بالمتغيرات المكتشفة"""
     syntax = template
     
-    # تصنيف المتغيرات المكتشفة
+    # تجميع الأكواد حسب النوع
     scale_vars = [v['code'] for v in found_vars if v['type'] == 'Scale']
     nom_vars = [v['code'] for v in found_vars if v['type'] == 'Nominal']
     all_codes = [v['code'] for v in found_vars]
 
-    # 1. التعامل مع {var} أو {var1} (متغيرات عامة)
+    # {var} -> تضع كل المتغيرات المكتشفة
     if '{var}' in syntax:
         syntax = syntax.replace('{var}', " ".join(all_codes))
     
-    # 2. التعامل مع {group} (للمقارنات والرسوم)
+    # {group} -> تحتاج متغير اسمي (Nominal)
     if '{group}' in syntax:
         if nom_vars:
             syntax = syntax.replace('{group}', nom_vars[0])
         else:
-            return f"* Error: Template requires a Grouping Variable (Nominal), but none found."
+            # لو مفيش Nominal صريح، نأخذ آخر متغير تم اكتشافه كافتراض
+            syntax = syntax.replace('{group}', all_codes[-1] if all_codes else "MISSING_GROUP")
 
-    # 3. التعامل مع Regression {y} و {x_list}
+    # {y} و {x} للانحدار والرسوم البيانية المتقدمة
     if '{y}' in syntax:
-        if len(scale_vars) >= 1:
-            syntax = syntax.replace('{y}', scale_vars[0]) # نفترض الأول هو التابع
-            
-            # الباقي هم المستقلين
-            remaining = [v for v in all_codes if v != scale_vars[0]]
-            if '{x_list}' in syntax:
-                syntax = syntax.replace('{x_list}', " ".join(remaining))
-            if '{x}' in syntax: # لو معادلة انحدار بسيط
-                syntax = syntax.replace('{x}', remaining[0] if remaining else "MISSING_IV")
+        # المتغير التابع عادة هو Scale (مثل الراتب أو الرصيد)
+        if scale_vars:
+            syntax = syntax.replace('{y}', scale_vars[0])
+            remaining = [x for x in all_codes if x != scale_vars[0]]
+            if '{x}' in syntax:
+                syntax = syntax.replace('{x}', remaining[0] if remaining else "MISSING_X")
         else:
-            return "* Error: Regression requires at least one Scale variable."
+             # لو مفيش Scale، نستخدم الأول وخلاص
+            syntax = syntax.replace('{y}', all_codes[0] if all_codes else "MISSING_Y")
 
     return syntax
 
 # --- 2. الواجهة الجانبية (Sidebar) ---
 with st.sidebar:
-    st.header("📂 1. ملف القواعد (المنهج)")
+    st.header("📂 1. ملف القواعد (Rules)")
     rules_file = st.file_uploader("ارفع ملف القواعد (spss_rules.csv)", type=['csv', 'xlsx'])
     
     rules_df = None
@@ -84,69 +58,47 @@ with st.sidebar:
             else:
                 rules_df = pd.read_excel(rules_file)
             st.success(f"✅ تم تحميل {len(rules_df)} قاعدة.")
-        except Exception as e:
-            st.error(f"خطأ في ملف القواعد: {e}")
+        except:
+            st.error("خطأ في قراءة ملف القواعد")
 
     st.markdown("---")
-    st.header("📊 2. ملف البيانات")
-    data_file = st.file_uploader("ارفع ملف البيانات (Data)", type=['xlsx', 'csv'])
+    st.header("📊 2. تعريف المتغيرات (Mapping)")
     
-    df = None
-    df_vars = {} 
-    
-    # Mapping الافتراضي
-    default_mapping = "x1=Gender\nx2=Education\nx3=Salary\nx4=Age\nx5=Satisfaction"
+    # هذا الـ Mapping الافتراضي مصمم خصيصاً لأسئلتك الحالية
+    default_mapping = """
+x1 = account balance
+x2 = atm transaction
+x2 = number of atm
+x3 = age
+x4 = city
+x4 = where banking is done
+x5 = debit card
+x6 = interest
+x6 = receive interest
+"""
+    v_mapping_text = st.text_area("عرف المتغيرات هنا (Code = Search Phrase):", value=default_mapping.strip(), height=250)
 
-    if data_file:
-        try:
-            if data_file.name.endswith('.csv'):
-                df = pd.read_csv(data_file)
-            else:
-                df = pd.read_excel(data_file)
-            
-            st.success(f"✅ البيانات: {len(df)} صف")
-            
-            detected_map = []
-            for i, col in enumerate(df.columns):
-                clean_col = col.strip()
-                m_type = determine_measure(df[col])
-                code = f"X{i+1}"
-                df_vars[clean_col.lower()] = {'code': code, 'type': m_type}
-                detected_map.append(f"{code}={clean_col}")
-            
-            if st.checkbox("استخدام أسماء الملف؟", value=True):
-                default_mapping = "\n".join(detected_map)
-                
-        except Exception as e:
-            st.error(f"خطأ بيانات: {e}")
-
-    v_mapping_text = st.text_area("X-Mapping:", value=default_mapping, height=150)
-
-# --- 3. معالجة الـ Mapping ---
-mapping_dict = {}
-code_to_type = {}
+# --- 3. معالجة الـ Mapping (محرك البحث) ---
+mapping_list = [] # List of tuples (code, phrase, type)
 
 for line in v_mapping_text.split('\n'):
     line = line.strip()
     if line and '=' in line:
         parts = line.split('=')
         if len(parts) == 2:
-            c = parts[0].strip().upper()
-            n = parts[1].strip().lower()
-            mapping_dict[n] = c
+            code = parts[0].strip().upper()
+            phrase = parts[1].strip().lower() # الجملة التي نبحث عنها
             
-            if df is not None and n in df_vars:
-                code_to_type[c] = df_vars[n]['type']
-            else:
-                # تخمين النوع لو مفيش داتا
-                if any(x in n for x in ['salary', 'age', 'score', 'sales']):
-                    code_to_type[c] = 'Scale'
-                else:
-                    code_to_type[c] = 'Nominal'
+            # تحديد النوع تلقائياً بناءً على كلمات مفتاحية في اسم المتغير
+            v_type = 'Nominal' # الافتراضي
+            if any(w in phrase for w in ['balance', 'transaction', 'age', 'salary', 'income', 'score']):
+                v_type = 'Scale'
+            
+            mapping_list.append({'code': code, 'phrase': phrase, 'type': v_type})
 
 # --- 4. واجهة الأسئلة والتحليل ---
 st.header("📝 3. محرك الأسئلة")
-questions_input = st.text_area("اكتب أسئلة الامتحان:", height=100, placeholder="Ex: Analyze frequency of Gender. Run regression for Salary based on Age.")
+questions_input = st.text_area("الأسئلة:", height=200)
 
 if st.button("🚀 توليد الكود (Run)"):
     if not questions_input:
@@ -154,54 +106,71 @@ if st.button("🚀 توليد الكود (Run)"):
     else:
         final_syntax = ["* Encoding: UTF-8.", "SET SEED=12345.", "OUTPUT MODIFY /SELECT ALL /REPORT PRINT LOG.", ""]
         
-        questions = re.split(r'(?:\n|\. )', questions_input)
+        # تقسيم الأسئلة بناءً على الأرقام (1. , 2. ) أو سطر جديد
+        # هذا الـ Regex يفصل الأسئلة التي تبدأ برقم ونقطة
+        questions = re.split(r'(?:\n|\d+\.\s)', questions_input)
         
-        for q_idx, q in enumerate(questions):
+        q_counter = 0
+        for q in questions:
             q_clean = q.strip()
-            if not q_clean: continue
+            # تجاهل الأسطر القصيرة جداً أو الفارغة
+            if len(q_clean) < 5: continue
             
-            final_syntax.append(f"\n* --- Q{q_idx+1}: {q_clean} ---.")
+            q_counter += 1
+            final_syntax.append(f"\n* ---------------------------------------------.")
+            final_syntax.append(f"* Q{q_counter}: {q_clean}")
+            final_syntax.append(f"* ---------------------------------------------.")
+            
             q_lower = q_clean.lower()
             
-            # أ) استخراج المتغيرات
+            # أ) استخراج المتغيرات (Match Engine)
             found_vars = []
-            for name, code in mapping_dict.items():
-                if re.search(r'\b' + re.escape(name) + r'\b', q_lower):
-                    v_type = code_to_type.get(code, 'Scale')
-                    found_vars.append({'name': name, 'code': code, 'type': v_type})
             
-            # إزالة التكرار
+            # نبحث عن كل جملة موجودة في الـ Mapping داخل السؤال
+            for item in mapping_list:
+                if item['phrase'] in q_lower:
+                    found_vars.append(item)
+            
+            # إزالة التكرار (نحتفظ بالمتغير مرة واحدة لكل سؤال)
             unique_vars = []
-            seen = set()
+            seen_codes = set()
             for v in found_vars:
-                if v['code'] not in seen:
+                if v['code'] not in seen_codes:
                     unique_vars.append(v)
-                    seen.add(v['code'])
+                    seen_codes.add(v['code'])
             found_vars = unique_vars
 
+            # إذا لم نجد متغيرات، نعطي تحذير وننتقل للسؤال التالي
             if not found_vars:
-                final_syntax.append("* Warning: No variables found from Mapping.")
+                final_syntax.append("* Warning: No variables found. Check your Mapping definitions.")
                 continue
 
-            # ب) البحث في ملف القواعد (Priority 1)
+            # ب) البحث في ملف القواعد (Rules Engine)
             rule_matched = False
             if rules_df is not None:
-                for idx, row in rules_df.iterrows():
+                # ترتيب القواعد: نبحث عن العبارات الأطول أولاً (الأكثر تخصصاً)
+                # مثلاً "bar chart" قبل "chart"
+                sorted_rules = rules_df.sort_values(by="Keyword", key=lambda x: x.str.len(), ascending=False)
+                
+                for idx, row in sorted_rules.iterrows():
                     keyword = str(row['Keyword']).lower().strip()
-                    # بحث عن الكلمة المفتاحية في السؤال
                     if keyword in q_lower:
                         template = row['Syntax_Template']
-                        generated_code = fill_template(template, found_vars)
-                        final_syntax.append(f"* Rule Applied: {row['Category']} ({keyword})")
-                        final_syntax.append(generated_code)
-                        rule_matched = True
-                        break # نكتفي بأول قاعدة تطابق (يمكنك إزالتها لو عايز يطبق كله)
-            
-            # ج) المنطق الاحتياطي (Fallback Logic) لو مفيش ملف قواعد أو لم نجد قاعدة
+                        
+                        # ملء القالب
+                        try:
+                            generated_code = fill_template(template, found_vars)
+                            final_syntax.append(f"* Rule Applied: {row['Category']} ({keyword})")
+                            final_syntax.append(generated_code)
+                            rule_matched = True
+                            break # وجدنا قاعدة، نتوقف عن البحث لهذا السؤال
+                        except Exception as e:
+                            final_syntax.append(f"* Error applying rule: {e}")
+
+            # ج) Fallback Logic (لو مفيش قاعدة طابقت)
             if not rule_matched:
-                final_syntax.append("* No rule matched in CSV, using Default Logic:")
-                # هنا نضع منطق بسيط جداً للطوارئ
                 vars_str = " ".join([v['code'] for v in found_vars])
+                final_syntax.append("* No specific rule matched. Generating Default Descriptives:")
                 final_syntax.append(f"DESCRIPTIVES VARIABLES={vars_str} /STATISTICS=MEAN STDDEV MIN MAX.")
 
         # عرض النتيجة
