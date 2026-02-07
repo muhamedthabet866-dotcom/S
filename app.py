@@ -6,65 +6,91 @@ import math
 
 # --- إعداد الصفحة ---
 st.set_page_config(page_title="MBA SPSS Genius", layout="wide", page_icon="🎓")
+st.title("🎓 المهندس محمد - SPSS Engine (Advanced Logic)")
 
-st.title("🎓 المهندس محمد - المحرك الذكي لـ SPSS (MBA Edition)")
+# --- 1. دوال الذكاء الإحصائي ---
 
-# --- 1. دوال مساعدة (Helpers) ---
-def fill_template(template, found_vars):
-    """ملء القالب بالمتغيرات المكتشفة"""
+def get_sturges_syntax(var_code, var_name, n_rows, data_series=None):
+    """توليد كود إعادة التكويد للفئات تلقائياً"""
+    if n_rows == 0: # لو مفيش داتا، نستخدم قيم افتراضية
+        k = 5
+        width = 1000
+        min_val = 0
+    else:
+        # Sturges Rule: k = 1 + 3.322 log(n)
+        k = math.ceil(1 + 3.322 * math.log10(n_rows))
+        if data_series is not None:
+            min_val = math.floor(data_series.min())
+            max_val = math.ceil(data_series.max())
+            width = math.ceil((max_val - min_val) / k)
+        else:
+            return f"* Note: Load Excel file to calculate exact intervals for {var_name}.\n", var_code
+
+    new_var = f"{var_code}_Cat"
+    syntax = f"\n* --- RECODE Logic for {var_name} (Sturges k={k}) ---.\n"
+    syntax += f"RECODE {var_code} "
+    
+    current = min_val
+    for i in range(1, k+1):
+        end = current + width
+        if i == k: 
+            syntax += f"({current} THRU HIGHEST={i}) " # آخر فئة مفتوحة
+        else:
+            syntax += f"({current} THRU {end}={i}) "
+        current = end
+    
+    syntax += f"INTO {new_var}.\n"
+    syntax += f"VARIABLE LABELS {new_var} 'Classes of {var_name}'.\n"
+    syntax += f"EXECUTE.\n"
+    return syntax, new_var
+
+def fill_template_advanced(template, found_vars, split_var=None):
+    """ملء القالب بذكاء مع تحديد المتغير التابع والمستقل"""
     syntax = template
     
-    # تجميع الأكواد حسب النوع
+    # تصنيف المتغيرات
     scale_vars = [v['code'] for v in found_vars if v['type'] == 'Scale']
     nom_vars = [v['code'] for v in found_vars if v['type'] == 'Nominal']
     all_codes = [v['code'] for v in found_vars]
 
-    # {var} -> تضع كل المتغيرات المكتشفة
+    # 1. استبدال {var} بالكل
     if '{var}' in syntax:
         syntax = syntax.replace('{var}', " ".join(all_codes))
-    
-    # {group} -> تحتاج متغير اسمي (Nominal)
+        # تصحيح خطأ شائع: لو القالب فيه var بدون أقواس
+    if '=var' in syntax: 
+         syntax = syntax.replace('=var', f"={' '.join(all_codes)}")
+
+    # 2. التعامل مع {group} (المتغير المُقسِّم)
     if '{group}' in syntax:
-        if nom_vars:
+        # لو عندنا split_var (زي سؤال for each city) نستخدمه هو
+        if split_var:
+            syntax = syntax.replace('{group}', split_var)
+        elif nom_vars:
             syntax = syntax.replace('{group}', nom_vars[0])
         else:
-            # لو مفيش Nominal صريح، نأخذ آخر متغير تم اكتشافه كافتراض
-            syntax = syntax.replace('{group}', all_codes[-1] if all_codes else "MISSING_GROUP")
+            syntax = syntax.replace('{group}', "MISSING_GROUP")
 
-    # {y} و {x} للانحدار والرسوم البيانية المتقدمة
+    # 3. التعامل مع {y} (المتغير الرقمي/التابع)
     if '{y}' in syntax:
-        # المتغير التابع عادة هو Scale (مثل الراتب أو الرصيد)
-        if scale_vars:
-            syntax = syntax.replace('{y}', scale_vars[0])
-            remaining = [x for x in all_codes if x != scale_vars[0]]
-            if '{x}' in syntax:
-                syntax = syntax.replace('{x}', remaining[0] if remaining else "MISSING_X")
-        else:
-             # لو مفيش Scale، نستخدم الأول وخلاص
-            syntax = syntax.replace('{y}', all_codes[0] if all_codes else "MISSING_Y")
+        # نختار أول متغير Scale كمتغير تابع
+        target = scale_vars[0] if scale_vars else (all_codes[0] if all_codes else "MISSING_Y")
+        syntax = syntax.replace('{y}', target)
 
     return syntax
 
-# --- 2. الواجهة الجانبية (Sidebar) ---
+# --- 2. الواجهة الجانبية ---
 with st.sidebar:
-    st.header("📂 1. ملف القواعد (Rules)")
-    rules_file = st.file_uploader("ارفع ملف القواعد (spss_rules.csv)", type=['csv', 'xlsx'])
-    
+    st.header("📂 1. البيانات والقواعد")
+    rules_file = st.file_uploader("ملف القواعد (CSV)", type=['csv'])
     rules_df = None
     if rules_file:
-        try:
-            if rules_file.name.endswith('.csv'):
-                rules_df = pd.read_csv(rules_file)
-            else:
-                rules_df = pd.read_excel(rules_file)
-            st.success(f"✅ تم تحميل {len(rules_df)} قاعدة.")
-        except:
-            st.error("خطأ في قراءة ملف القواعد")
+        rules_df = pd.read_csv(rules_file)
 
-    st.markdown("---")
-    st.header("📊 2. تعريف المتغيرات (Mapping)")
+    data_file = st.file_uploader("ملف البيانات (Excel/CSV)", type=['xlsx', 'csv'])
+    df = None
+    df_vars = {} 
     
-    # هذا الـ Mapping الافتراضي مصمم خصيصاً لأسئلتك الحالية
+    # Mapping افتراضي محدث لأسئلة البنك
     default_mapping = """
 x1 = account balance
 x2 = atm transaction
@@ -76,104 +102,152 @@ x5 = debit card
 x6 = interest
 x6 = receive interest
 """
-    v_mapping_text = st.text_area("عرف المتغيرات هنا (Code = Search Phrase):", value=default_mapping.strip(), height=250)
-
-# --- 3. معالجة الـ Mapping (محرك البحث) ---
-mapping_list = [] # List of tuples (code, phrase, type)
-
-for line in v_mapping_text.split('\n'):
-    line = line.strip()
-    if line and '=' in line:
-        parts = line.split('=')
-        if len(parts) == 2:
-            code = parts[0].strip().upper()
-            phrase = parts[1].strip().lower() # الجملة التي نبحث عنها
-            
-            # تحديد النوع تلقائياً بناءً على كلمات مفتاحية في اسم المتغير
-            v_type = 'Nominal' # الافتراضي
-            if any(w in phrase for w in ['balance', 'transaction', 'age', 'salary', 'income', 'score']):
-                v_type = 'Scale'
-            
-            mapping_list.append({'code': code, 'phrase': phrase, 'type': v_type})
-
-# --- 4. واجهة الأسئلة والتحليل ---
-st.header("📝 3. محرك الأسئلة")
-questions_input = st.text_area("الأسئلة:", height=200)
-
-if st.button("🚀 توليد الكود (Run)"):
-    if not questions_input:
-        st.warning("ادخل الأسئلة أولاً.")
-    else:
-        final_syntax = ["* Encoding: UTF-8.", "SET SEED=12345.", "OUTPUT MODIFY /SELECT ALL /REPORT PRINT LOG.", ""]
-        
-        # تقسيم الأسئلة بناءً على الأرقام (1. , 2. ) أو سطر جديد
-        # هذا الـ Regex يفصل الأسئلة التي تبدأ برقم ونقطة
-        questions = re.split(r'(?:\n|\d+\.\s)', questions_input)
-        
-        q_counter = 0
-        for q in questions:
-            q_clean = q.strip()
-            # تجاهل الأسطر القصيرة جداً أو الفارغة
-            if len(q_clean) < 5: continue
-            
-            q_counter += 1
-            final_syntax.append(f"\n* ---------------------------------------------.")
-            final_syntax.append(f"* Q{q_counter}: {q_clean}")
-            final_syntax.append(f"* ---------------------------------------------.")
-            
-            q_lower = q_clean.lower()
-            
-            # أ) استخراج المتغيرات (Match Engine)
-            found_vars = []
-            
-            # نبحث عن كل جملة موجودة في الـ Mapping داخل السؤال
-            for item in mapping_list:
-                if item['phrase'] in q_lower:
-                    found_vars.append(item)
-            
-            # إزالة التكرار (نحتفظ بالمتغير مرة واحدة لكل سؤال)
-            unique_vars = []
-            seen_codes = set()
-            for v in found_vars:
-                if v['code'] not in seen_codes:
-                    unique_vars.append(v)
-                    seen_codes.add(v['code'])
-            found_vars = unique_vars
-
-            # إذا لم نجد متغيرات، نعطي تحذير وننتقل للسؤال التالي
-            if not found_vars:
-                final_syntax.append("* Warning: No variables found. Check your Mapping definitions.")
-                continue
-
-            # ب) البحث في ملف القواعد (Rules Engine)
-            rule_matched = False
-            if rules_df is not None:
-                # ترتيب القواعد: نبحث عن العبارات الأطول أولاً (الأكثر تخصصاً)
-                # مثلاً "bar chart" قبل "chart"
-                sorted_rules = rules_df.sort_values(by="Keyword", key=lambda x: x.str.len(), ascending=False)
+    if data_file:
+        try:
+            if data_file.name.endswith('.csv'): df = pd.read_csv(data_file)
+            else: df = pd.read_excel(data_file)
+            st.success(f"تم تحميل {len(df)} صف")
+            # تعبئة المتغيرات من الداتا
+            for i, col in enumerate(df.columns):
+                 # تنظيف الاسم
+                clean_name = col.strip().lower()
+                # تحديد النوع
+                if pd.api.types.is_numeric_dtype(df[col]) and df[col].nunique() > 10:
+                    v_type = 'Scale'
+                else:
+                    v_type = 'Nominal'
                 
-                for idx, row in sorted_rules.iterrows():
-                    keyword = str(row['Keyword']).lower().strip()
-                    if keyword in q_lower:
-                        template = row['Syntax_Template']
-                        
-                        # ملء القالب
-                        try:
-                            generated_code = fill_template(template, found_vars)
-                            final_syntax.append(f"* Rule Applied: {row['Category']} ({keyword})")
-                            final_syntax.append(generated_code)
-                            rule_matched = True
-                            break # وجدنا قاعدة، نتوقف عن البحث لهذا السؤال
-                        except Exception as e:
-                            final_syntax.append(f"* Error applying rule: {e}")
+                # ربط الكود بالاسم الحقيقي والداتا
+                # ملاحظة: هنا سنحاول ربط الكود X بناء على الـ Mapping لاحقاً
+                # للتسهيل سنخزن الداتا باسم العمود
+                df_vars[clean_name] = {'data': df[col], 'type': v_type}
+                
+        except Exception as e:
+            st.error(e)
 
-            # ج) Fallback Logic (لو مفيش قاعدة طابقت)
-            if not rule_matched:
+    v_mapping_text = st.text_area("تعريف المتغيرات:", value=default_mapping.strip(), height=200)
+
+# --- 3. معالجة الـ Mapping ---
+mapping_list = [] 
+for line in v_mapping_text.split('\n'):
+    if '=' in line:
+        parts = line.split('=')
+        code = parts[0].strip().upper()
+        phrase = parts[1].strip().lower()
+        # تحديد النوع افتراضياً
+        v_type = 'Scale' if any(x in phrase for x in ['balance', 'transaction', 'age']) else 'Nominal'
+        mapping_list.append({'code': code, 'phrase': phrase, 'type': v_type, 'real_name': phrase})
+
+# --- 4. المحرك الرئيسي ---
+st.header("📝 الأسئلة")
+questions_input = st.text_area("الصق الأسئلة:", height=300)
+
+if st.button("🚀 Run Analysis"):
+    final_syntax = ["* Encoding: UTF-8.", "SET SEED=12345.", "OUTPUT MODIFY /SELECT ALL /REPORT PRINT LOG.", ""]
+    
+    # تقسيم الأسئلة
+    questions = re.split(r'(?:\n|\d+\.\s)', questions_input)
+    
+    q_num = 0
+    for q in questions:
+        q_clean = q.strip()
+        if len(q_clean) < 5: continue
+        q_num += 1
+        q_lower = q_clean.lower()
+        
+        final_syntax.append(f"\n* ---------------- Q{q_num} ----------------.")
+        final_syntax.append(f"* Question: {q_clean}")
+
+        # أ) البحث عن المتغيرات
+        found_vars = []
+        for item in mapping_list:
+            # بحث دقيق عن الجملة
+            if item['phrase'] in q_lower:
+                found_vars.append(item)
+        
+        # إزالة التكرار
+        unique = []
+        seen = set()
+        for v in found_vars:
+            if v['code'] not in seen:
+                unique.append(v)
+                seen.add(v['code'])
+        found_vars = unique
+
+        if not found_vars:
+            final_syntax.append("* Warning: No variables found defined in Mapping.")
+            continue
+
+        # ب) اكتشاف النية الخاصة (Logic Detection)
+        
+        # 1. هل يوجد طلب "For Each" أو "Per" (Split File)؟
+        split_code = None
+        if 'for each' in q_lower or 'per ' in q_lower:
+            # البحث عن المتغير الاسمي الذي جاء بعد for each
+            # نفترض أنه أحد المتغيرات الـ Nominal الموجودة في السؤال
+            nominals = [v for v in found_vars if v['type'] == 'Nominal']
+            if nominals:
+                split_code = nominals[0]['code'] # نأخذ أول متغير اسمي وجدناه
+                final_syntax.append(f"\n* --- SPLIT FILE BY {split_code} ---.")
+                final_syntax.append(f"SORT CASES BY {split_code}.")
+                final_syntax.append(f"SPLIT FILE SEPARATE BY {split_code}.")
+
+        # 2. هل يوجد طلب "Classes" أو "Groups" لمتغير رقمي؟ (Recode)
+        needs_recode = False
+        recode_var = None
+        if 'class' in q_lower or 'group' in q_lower:
+            scales = [v for v in found_vars if v['type'] == 'Scale']
+            if scales:
+                needs_recode = True
+                recode_var = scales[0] # المتغير الذي سنحوله لفئات
+        
+        # ج) اختيار وتطبيق القاعدة
+        code_generated = ""
+        rule_applied = False
+        
+        if rules_df is not None:
+             # ترتيب القواعد بالأطول أولاً لتجنب التداخل
+            sorted_rules = rules_df.sort_values(by="Keyword", key=lambda x: x.str.len(), ascending=False)
+            
+            for idx, row in sorted_rules.iterrows():
+                if str(row['Keyword']).lower() in q_lower:
+                    template = row['Syntax_Template']
+                    
+                    # حالة خاصة: لو السؤال يطلب فئات (Classes)، نستخدم المتغير الجديد
+                    if needs_recode and recode_var:
+                        # توليد كود الـ Recode
+                        n_rows = len(df) if df is not None else 0
+                        data_col = df_vars.get(recode_var['real_name'], {}).get('data') if df is not None else None
+                        
+                        rec_syntax, new_var_code = get_sturges_syntax(recode_var['code'], recode_var['phrase'], n_rows, data_col)
+                        final_syntax.append(rec_syntax)
+                        
+                        # نعدل المتغيرات المرسلة للقالب لتشمل المتغير الجديد بدلاً من القديم
+                        temp_vars = [v for v in found_vars if v['code'] != recode_var['code']]
+                        temp_vars.append({'code': new_var_code, 'type': 'Nominal'}) # المتغير الجديد أصبح اسمي
+                        
+                        code_generated = fill_template_advanced(template, temp_vars, split_code)
+                    else:
+                        code_generated = fill_template_advanced(template, found_vars, split_code)
+                    
+                    final_syntax.append(f"* Rule: {row['Category']}")
+                    final_syntax.append(code_generated)
+                    rule_applied = True
+                    break
+        
+        # د) الـ Fallback (لو مفيش قاعدة)
+        if not rule_applied:
+            # لو السؤال عن Outliers
+            if 'outlier' in q_lower or 'extreme' in q_lower:
+                target = found_vars[0]['code']
+                final_syntax.append(f"EXAMINE VARIABLES={target} /PLOT BOXPLOT.")
+            else:
                 vars_str = " ".join([v['code'] for v in found_vars])
-                final_syntax.append("* No specific rule matched. Generating Default Descriptives:")
                 final_syntax.append(f"DESCRIPTIVES VARIABLES={vars_str} /STATISTICS=MEAN STDDEV MIN MAX.")
 
-        # عرض النتيجة
-        st.subheader("💻 كود SPSS النهائي:")
-        full_text = "\n".join(final_syntax)
-        st.code(full_text, language='spss')
+        # هـ) إغلاق الـ Split File
+        if split_code:
+            final_syntax.append("SPLIT FILE OFF.")
+
+    st.subheader("💻 الكود النهائي:")
+    st.code("\n".join(final_syntax), language='spss')
