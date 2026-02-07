@@ -1,5 +1,8 @@
-streamlit
-pandas
-python-docx
-openpyxl
-google-generativeai
+# requirements.txt
+pandas>=1.3.0
+python-docx>=0.8.11
+openpyxl>=3.0.9
+numpy>=1.21.0
+
+# التثبيت
+pip install -r requirements.txt
