@@ -4,674 +4,735 @@ import numpy as np
 import re
 import base64
 from datetime import datetime
-import io
+from collections import OrderedDict
+import hashlib
 
 # إعداد صفحة Streamlit
 st.set_page_config(
-    page_title="Universal SPSS Code Generator",
+    page_title="Advanced SPSS Code Generator",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 مولد أكواد SPSS الشامل")
-st.markdown("### برنامج ذكي لتوليد أكواد SPSS لأي امتحان إحصائي")
+st.title("📊 مولد أكواد SPSS المتقدم")
+st.markdown("### برنامج ذكي يعالج جميع الأسئلة ويولّد كود فريد لكل سؤال")
 
-class UniversalSPSSGenerator:
+class AdvancedSPSSGenerator:
     def __init__(self):
-        self.analysis_templates = self._load_analysis_templates()
-        self.variable_mapping = {}
-    
-    def _load_analysis_templates(self):
-        """تحميل قوالب التحليل المختلفة"""
-        return {
-            'descriptive': {
-                'title': 'الإحصاءات الوصفية',
-                'syntax': 'DESCRIPTIVES VARIABLES={vars}\n  /STATISTICS=MEAN STDDEV MIN MAX.',
-                'keywords': ['mean', 'average', 'median', 'mode', 'standard deviation', 'variance']
-            },
-            'frequency': {
-                'title': 'الجداول التكرارية',
-                'syntax': 'FREQUENCIES VARIABLES={vars}\n  /ORDER=ANALYSIS\n  /BARCHART.',
-                'keywords': ['frequency', 'frequency table', 'distribution', 'count']
-            },
-            't_test': {
-                'title': 'اختبار T',
-                'syntax': 'T-TEST GROUPS={group_var}\n  /VARIABLES={test_vars}\n  /CRITERIA=CI(.95).',
-                'keywords': ['t-test', 'compare means', 'independent samples', 'paired']
-            },
-            'anova': {
-                'title': 'تحليل التباين (ANOVA)',
-                'syntax': 'ONEWAY {dv} BY {iv}\n  /STATISTICS DESCRIPTIVES\n  /MISSING ANALYSIS.',
-                'keywords': ['anova', 'analysis of variance', 'f-test', 'one-way']
-            },
-            'correlation': {
-                'title': 'الارتباط',
-                'syntax': 'CORRELATIONS\n  /VARIABLES={vars}\n  /PRINT=TWOTAIL NOSIG.',
-                'keywords': ['correlation', 'relationship', 'association', 'correlate']
-            },
-            'regression': {
-                'title': 'الانحدار',
-                'syntax': 'REGRESSION\n  /DEPENDENT {dv}\n  /METHOD=ENTER {iv_list}.',
-                'keywords': ['regression', 'predict', 'linear model', 'multiple regression']
-            },
-            'chi_square': {
-                'title': 'اختبار مربع كاي',
-                'syntax': 'CROSSTABS\n  /TABLES={var1} BY {var2}\n  /STATISTICS=CHISQ.',
-                'keywords': ['chi-square', 'chi squared', 'contingency', 'association']
-            },
-            'graph': {
-                'title': 'الرسوم البيانية',
-                'syntax': 'GRAPH /{type}={vars}\n  /TITLE="{title}".',
-                'keywords': ['graph', 'chart', 'histogram', 'bar chart', 'pie chart', 'scatter']
-            },
-            'confidence': {
-                'title': 'فترات الثقة',
-                'syntax': 'EXAMINE VARIABLES={var}\n  /CINTERVAL {level}\n  /PLOT NONE.',
-                'keywords': ['confidence interval', 'ci', '95%', '99%', 'interval estimate']
-            },
-            'normality': {
-                'title': 'اختبارات الطبيعية',
-                'syntax': 'EXAMINE VARIABLES={var}\n  /PLOT NPPLOT\n  /STATISTICS NONE.',
-                'keywords': ['normality', 'normal distribution', 'shapiro-wilk', 'kolmogorov']
-            }
+        self.processed_questions = OrderedDict()
+        self.variable_analysis_cache = {}
+        self.question_types = {
+            'descriptive': ['mean', 'average', 'median', 'mode', 'standard deviation', 'variance', 'descriptive'],
+            'frequency': ['frequency', 'distribution', 'count', 'table', 'percentage', 'percent'],
+            't_test': ['t-test', 't test', 'compare means', 'independent samples', 'paired'],
+            'anova': ['anova', 'analysis of variance', 'f-test', 'one-way', 'two-way'],
+            'correlation': ['correlation', 'relationship', 'association', 'correlate'],
+            'regression': ['regression', 'predict', 'linear model', 'multiple regression'],
+            'chi_square': ['chi-square', 'chi squared', 'contingency', 'association categorical'],
+            'graph': ['graph', 'chart', 'histogram', 'bar chart', 'pie chart', 'scatter', 'plot'],
+            'confidence': ['confidence interval', 'ci', '95%', '99%', 'interval'],
+            'normality': ['normality', 'normal distribution', 'shapiro-wilk', 'kolmogorov'],
+            'outliers': ['outliers', 'extreme values', 'unusual observations'],
+            'group_comparison': ['by group', 'for each', 'compare groups', 'between groups'],
+            'recode': ['recode', 'categorize', 'group into', 'create classes', 'classify'],
+            'transform': ['transform', 'compute', 'create variable', 'new variable', 'calculate']
         }
     
-    def analyze_data_structure(self, df):
-        """تحليل هيكل البيانات وتحديد أنواع المتغيرات"""
-        variable_info = {}
+    def analyze_dataset(self, df):
+        """تحليل شامل للبيانات"""
+        analysis = {
+            'variables': {},
+            'summary': {
+                'total_rows': len(df),
+                'total_columns': len(df.columns),
+                'numeric_vars': [],
+                'categorical_vars': [],
+                'text_vars': []
+            }
+        }
         
         for column in df.columns:
             col_data = df[column]
+            var_info = {
+                'name': column,
+                'type': 'unknown',
+                'missing': int(col_data.isna().sum()),
+                'missing_percent': round(col_data.isna().sum() / len(df) * 100, 2),
+                'unique_values': int(col_data.nunique())
+            }
             
-            # تحديد نوع المتغير
             try:
-                numeric_check = pd.to_numeric(col_data.dropna())
-                unique_count = col_data.nunique()
+                # محاولة تحويل إلى رقم
+                numeric_data = pd.to_numeric(col_data.dropna())
+                var_info['type'] = 'numeric'
+                var_info['min'] = float(numeric_data.min())
+                var_info['max'] = float(numeric_data.max())
+                var_info['mean'] = float(numeric_data.mean())
+                var_info['std'] = float(numeric_data.std())
                 
-                if unique_count <= 10:
-                    # إذا كان عدد القيم الفريدة قليل، قد يكون فئوي
-                    variable_info[column] = {
-                        'type': 'categorical',
-                        'unique_values': unique_count,
-                        'missing': col_data.isna().sum(),
-                        'sample_values': list(col_data.dropna().unique())[:5]
-                    }
+                if var_info['unique_values'] <= 10:
+                    var_info['subtype'] = 'categorical_numeric'
+                    var_info['values'] = sorted(numeric_data.unique())
+                    analysis['summary']['categorical_vars'].append(column)
                 else:
-                    # متغير كمي
-                    variable_info[column] = {
-                        'type': 'numeric',
-                        'min': float(numeric_check.min()),
-                        'max': float(numeric_check.max()),
-                        'mean': float(numeric_check.mean()),
-                        'missing': col_data.isna().sum()
-                    }
+                    var_info['subtype'] = 'continuous'
+                    analysis['summary']['numeric_vars'].append(column)
+                    
             except:
                 # متغير نصي
-                variable_info[column] = {
-                    'type': 'text',
-                    'unique_values': col_data.nunique(),
-                    'missing': col_data.isna().sum(),
-                    'sample_values': list(col_data.dropna().unique())[:3]
-                }
+                var_info['type'] = 'text'
+                if var_info['unique_values'] <= 15:
+                    var_info['subtype'] = 'categorical_text'
+                    var_info['values'] = list(col_data.dropna().unique())[:10]
+                    analysis['summary']['categorical_vars'].append(column)
+                else:
+                    var_info['subtype'] = 'free_text'
+                    analysis['summary']['text_vars'].append(column)
+            
+            analysis['variables'][column] = var_info
         
-        return variable_info
+        return analysis
     
-    def detect_variables_from_question(self, question, variable_info):
-        """اكتشاف المتغيرات المذكورة في السؤال"""
+    def extract_variables_from_text(self, text, variable_names):
+        """استخراج المتغيرات من النص بدقة"""
+        text_lower = text.lower()
         detected_vars = []
-        question_lower = question.lower()
         
-        for var in variable_info.keys():
+        for var in variable_names:
             var_lower = var.lower()
             
-            # البحث عن اسم المتغير في السؤال
-            if var_lower in question_lower:
-                detected_vars.append(var)
-            # البحث عن اختصارات شائعة
-            elif any(term in question_lower for term in [f' {var} ', f'{var},', f'{var}.']):
-                detected_vars.append(var)
+            # طرق مختلفة للكشف عن المتغيرات
+            patterns = [
+                f'\\b{var_lower}\\b',  # الكلمة كاملة
+                f'{var_lower}\\s+',    # متبوع بمسافة
+                f'\\s+{var_lower}\\b',  # مسبوق بمسافة
+                var_lower.replace('_', ' '),  # مع underscores
+            ]
+            
+            for pattern in patterns:
+                if re.search(pattern, text_lower):
+                    detected_vars.append(var)
+                    break
+            
+            # أيضا التحقق من أجزاء الاسم
+            if '_' in var:
+                parts = var_lower.split('_')
+                if any(part in text_lower for part in parts if len(part) > 2):
+                    detected_vars.append(var)
         
-        return detected_vars
+        # إزالة التكرارات مع الحفاظ على الترتيب
+        return list(OrderedDict.fromkeys(detected_vars))
     
     def classify_question(self, question):
-        """تصنيف السؤال بناءً على محتواه"""
+        """تصنيف السؤال بدقة مع تحديد الأنواع الفرعية"""
         question_lower = question.lower()
-        
-        # الكلمات المفتاحية لكل نوع من التحليلات
         classifications = []
         
-        if any(keyword in question_lower for keyword in ['mean', 'average', 'median', 'mode', 'standard deviation', 'descriptive']):
-            classifications.append('descriptive')
+        for q_type, keywords in self.question_types.items():
+            for keyword in keywords:
+                if re.search(r'\b' + re.escape(keyword) + r'\b', question_lower):
+                    classifications.append(q_type)
+                    break
         
-        if any(keyword in question_lower for keyword in ['frequency', 'distribution', 'count', 'table']):
-            classifications.append('frequency')
+        # كشف الأنواع الخاصة
+        if 'graph' in classifications:
+            if 'histogram' in question_lower:
+                classifications.append('histogram')
+            if 'bar' in question_lower and 'chart' in question_lower:
+                classifications.append('bar_chart')
+            if 'pie' in question_lower:
+                classifications.append('pie_chart')
+            if 'scatter' in question_lower:
+                classifications.append('scatter_plot')
         
-        if any(keyword in question_lower for keyword in ['t-test', 't test', 'compare means', 'independent', 'paired']):
-            classifications.append('t_test')
-        
-        if any(keyword in question_lower for keyword in ['anova', 'analysis of variance', 'f-test']):
-            classifications.append('anova')
-        
-        if any(keyword in question_lower for keyword in ['correlation', 'relationship', 'association']):
-            classifications.append('correlation')
-        
-        if any(keyword in question_lower for keyword in ['regression', 'predict', 'linear model']):
-            classifications.append('regression')
-        
-        if any(keyword in question_lower for keyword in ['chi-square', 'chi square', 'contingency']):
-            classifications.append('chi_square')
-        
-        if any(keyword in question_lower for keyword in ['graph', 'chart', 'histogram', 'bar', 'pie', 'scatter']):
-            classifications.append('graph')
-        
-        if any(keyword in question_lower for keyword in ['confidence interval', 'ci', '95%', '99%']):
-            classifications.append('confidence')
-        
-        if any(keyword in question_lower for keyword in ['normality', 'normal distribution', 'shapiro', 'kolmogorov']):
-            classifications.append('normality')
-        
-        return classifications if classifications else ['general']
+        return list(OrderedDict.fromkeys(classifications)) if classifications else ['general_analysis']
     
-    def generate_spss_syntax(self, question, var_info, detected_vars, q_num):
-        """توليد كود SPSS بناءً على السؤال والمتغيرات"""
+    def generate_question_fingerprint(self, question, detected_vars, classifications):
+        """إنشاء بصمة فريدة للسؤال لمنع التكرار"""
+        components = [
+            ' '.join(sorted(classifications)),
+            ' '.join(sorted(detected_vars)),
+            re.sub(r'\s+', ' ', question.lower()).strip()
+        ]
+        
+        fingerprint_string = '|'.join(components)
+        return hashlib.md5(fingerprint_string.encode()).hexdigest()[:8]
+    
+    def generate_spss_for_question(self, q_num, question, df, data_analysis):
+        """توليد كود SPSS خاص ومختلف لكل سؤال"""
+        
+        # استخراج المتغيرات
+        variable_names = list(df.columns)
+        detected_vars = self.extract_variables_from_text(question, variable_names)
+        
+        # تصنيف السؤال
         classifications = self.classify_question(question)
-        syntax_lines = []
-        comment_lines = []
         
-        # عنوان السؤال
-        title = f"* {'='*70}.\n* QUESTION {q_num}: {question[:60]}...\n* {'='*70}."
-        syntax_lines.append(title)
+        # إنشاء بصمة السؤال
+        fingerprint = self.generate_question_fingerprint(question, detected_vars, classifications)
         
-        for classification in classifications:
-            if classification == 'descriptive':
-                if detected_vars:
-                    vars_str = ' '.join(detected_vars[:3])
-                    syntax = f"DESCRIPTIVES VARIABLES={vars_str}\n  /STATISTICS=MEAN STDDEV MIN MAX SEMEAN KURTOSIS SKEWNESS."
-                    syntax_lines.append(syntax)
-                    comment = f"* Descriptive statistics for: {vars_str}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'frequency':
-                # البحث عن متغيرات فئوية
-                categorical_vars = [v for v in detected_vars if var_info.get(v, {}).get('type') == 'categorical']
-                if categorical_vars:
-                    vars_str = ' '.join(categorical_vars[:3])
-                    syntax = f"FREQUENCIES VARIABLES={vars_str}\n  /ORDER=ANALYSIS\n  /BARCHART\n  /PIECHART."
-                    syntax_lines.append(syntax)
-                    comment = f"* Frequency distribution for categorical variables: {vars_str}"
-                    comment_lines.append(comment)
-            
-            elif classification == 't_test':
-                if len(detected_vars) >= 2:
-                    group_var = detected_vars[0]
-                    test_vars = ' '.join(detected_vars[1:3])
-                    syntax = f"T-TEST GROUPS={group_var}\n  /VARIABLES={test_vars}\n  /CRITERIA=CI(.95)\n  /MISSING=ANALYSIS."
-                    syntax_lines.append(syntax)
-                    comment = f"* T-test comparing {test_vars} by {group_var}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'anova':
-                if len(detected_vars) >= 2:
-                    dv = detected_vars[0]
-                    iv = detected_vars[1]
-                    syntax = f"ONEWAY {dv} BY {iv}\n  /STATISTICS DESCRIPTIVES HOMOGENEITY\n  /MISSING ANALYSIS\n  /POSTHOC=TUKEY ALPHA(0.05)."
-                    syntax_lines.append(syntax)
-                    comment = f"* One-way ANOVA: {dv} by {iv}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'correlation':
-                if len(detected_vars) >= 2:
-                    vars_str = ' '.join(detected_vars[:4])
-                    syntax = f"CORRELATIONS\n  /VARIABLES={vars_str}\n  /PRINT=TWOTAIL NOSIG\n  /MISSING=PAIRWISE."
-                    syntax_lines.append(syntax)
-                    comment = f"* Correlation analysis between: {vars_str}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'regression':
-                if len(detected_vars) >= 2:
-                    dv = detected_vars[0]
-                    iv_list = ' '.join(detected_vars[1:4])
-                    syntax = f"REGRESSION\n  /MISSING LISTWISE\n  /STATISTICS COEFF OUTS R ANOVA\n  /CRITERIA=PIN(.05) POUT(.10)\n  /NOORIGIN\n  /DEPENDENT {dv}\n  /METHOD=ENTER {iv_list}."
-                    syntax_lines.append(syntax)
-                    comment = f"* Regression analysis: {dv} predicted by {iv_list}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'chi_square':
-                if len(detected_vars) >= 2:
-                    var1, var2 = detected_vars[:2]
-                    syntax = f"CROSSTABS\n  /TABLES={var1} BY {var2}\n  /FORMAT=AVALUE TABLES\n  /STATISTICS=CHISQ PHI\n  /CELLS=COUNT EXPECTED."
-                    syntax_lines.append(syntax)
-                    comment = f"* Chi-square test of independence: {var1} × {var2}"
-                    comment_lines.append(comment)
-            
-            elif classification == 'graph':
-                if detected_vars:
-                    # تحديد نوع الرسم البياني
-                    if 'histogram' in question.lower():
-                        for var in detected_vars[:2]:
-                            if var_info.get(var, {}).get('type') == 'numeric':
-                                syntax = f"GRAPH /HISTOGRAM(NORMAL)={var}\n  /TITLE='Histogram of {var}'."
-                                syntax_lines.append(syntax)
-                    elif 'bar' in question.lower():
-                        if len(detected_vars) >= 2:
-                            syntax = f"GRAPH /BAR(SIMPLE)=MEAN({detected_vars[0]}) BY {detected_vars[1]}\n  /TITLE='Bar Chart: {detected_vars[0]} by {detected_vars[1]}'."
-                            syntax_lines.append(syntax)
-                    elif 'scatter' in question.lower():
-                        if len(detected_vars) >= 2:
-                            syntax = f"GRAPH /SCATTERPLOT(BIVAR)={detected_vars[0]} WITH {detected_vars[1]}\n  /TITLE='Scatter Plot: {detected_vars[0]} vs {detected_vars[1]}'."
-                            syntax_lines.append(syntax)
-            
-            elif classification == 'confidence':
-                if detected_vars:
-                    var = detected_vars[0]
-                    if '95%' in question.lower():
-                        syntax = f"EXAMINE VARIABLES={var}\n  /CINTERVAL 95\n  /PLOT NONE."
-                    elif '99%' in question.lower():
-                        syntax = f"EXAMINE VARIABLES={var}\n  /CINTERVAL 99\n  /PLOT NONE."
-                    else:
-                        syntax = f"EXAMINE VARIABLES={var}\n  /CINTERVAL 95\n  /PLOT NONE."
-                    syntax_lines.append(syntax)
-            
-            elif classification == 'normality':
-                if detected_vars:
-                    var = detected_vars[0]
-                    syntax = f"EXAMINE VARIABLES={var}\n  /PLOT NPPLOT\n  /STATISTICS DESCRIPTIVES."
-                    syntax_lines.append(syntax)
-            
-            elif classification == 'general':
-                if detected_vars:
-                    vars_str = ' '.join(detected_vars[:3])
-                    syntax = f"DESCRIPTIVES VARIABLES={vars_str}\n  /STATISTICS=MEAN STDDEV MIN MAX.\nFREQUENCIES VARIABLES={vars_str}\n  /ORDER=ANALYSIS."
-                    syntax_lines.append(syntax)
-                    comment = f"* General analysis for variables: {vars_str}"
-                    comment_lines.append(comment)
+        # التحقق من عدم تكرار السؤال
+        if fingerprint in self.processed_questions:
+            similar_q = self.processed_questions[fingerprint]
+            return None, f"السؤال مشابه للسؤال {similar_q['number']}. تم تجنبه لمنع التكرار."
         
-        # إذا لم يتم اكتشاف أي متغيرات
-        if not syntax_lines[1:]:  # إذا كان العنوان فقط
-            syntax_lines.append("* Please specify which variables to analyze.")
-            syntax_lines.append("DESCRIPTIVES VARIABLES=ALL\n  /STATISTICS=MEAN STDDEV.")
+        # حفظ البصمة
+        self.processed_questions[fingerprint] = {
+            'number': q_num,
+            'question': question[:100],
+            'variables': detected_vars,
+            'types': classifications
+        }
         
-        # دمج التعليقات مع الصيغة
-        if comment_lines:
-            syntax_lines.insert(1, '\n'.join(comment_lines))
+        # توليد الكود
+        code_lines = []
+        code_lines.append(f"* {'='*70}")
+        code_lines.append(f"* QUESTION {q_num}: {question[:80]}{'...' if len(question) > 80 else ''}")
+        code_lines.append(f"* Types: {', '.join(classifications)}")
+        if detected_vars:
+            code_lines.append(f"* Variables detected: {', '.join(detected_vars)}")
+        code_lines.append(f"* {'='*70}\n")
         
-        return '\n'.join(syntax_lines) + '\n\n'
+        # إضافة تعليق تحليلي
+        code_lines.append(f"* ANALYSIS FOR QUESTION {q_num}")
+        
+        # توليد كود بناءً على التصنيفات
+        if not detected_vars:
+            # إذا لم يتم اكتشاف متغيرات
+            code_lines.append("* No specific variables detected in question.")
+            code_lines.append("* Running general descriptive analysis on all variables.")
+            code_lines.append("DESCRIPTIVES VARIABLES=ALL")
+            code_lines.append("  /STATISTICS=MEAN STDDEV MIN MAX.\n")
+        
+        else:
+            # معالجة كل نوع من التحليلات
+            processed_commands = []
+            
+            for q_type in classifications:
+                if q_type == 'descriptive':
+                    if detected_vars:
+                        vars_str = ' '.join(detected_vars[:5])
+                        cmd = f"DESCRIPTIVES VARIABLES={vars_str}"
+                        cmd += "\n  /STATISTICS=MEAN STDDEV MIN MAX SEMEAN KURTOSIS SKEWNESS."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                    
+                elif q_type == 'frequency':
+                    categorical_vars = [v for v in detected_vars 
+                                      if data_analysis['variables'].get(v, {}).get('subtype') in 
+                                      ['categorical_numeric', 'categorical_text']]
+                    if categorical_vars:
+                        vars_str = ' '.join(categorical_vars[:5])
+                        cmd = f"FREQUENCIES VARIABLES={vars_str}"
+                        cmd += "\n  /ORDER=ANALYSIS"
+                        cmd += "\n  /BARCHART"
+                        cmd += "\n  /PIECHART."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                    
+                elif q_type == 'histogram':
+                    numeric_vars = [v for v in detected_vars 
+                                  if data_analysis['variables'].get(v, {}).get('subtype') == 'continuous']
+                    for var in numeric_vars[:3]:
+                        cmd = f"GRAPH /HISTOGRAM(NORMAL)={var}"
+                        cmd += f"\n  /TITLE='Histogram of {var}'."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 'bar_chart':
+                    if len(detected_vars) >= 2:
+                        # افتراض أن الأول هو المتغير الكمي والثاني هو الفئوي
+                        cmd = f"GRAPH /BAR(SIMPLE)=MEAN({detected_vars[0]}) BY {detected_vars[1]}"
+                        cmd += f"\n  /TITLE='Average {detected_vars[0]} by {detected_vars[1]}'."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 't_test':
+                    if len(detected_vars) >= 2:
+                        # افتراض أن الأول هو متغير المجموعة
+                        group_var = detected_vars[0]
+                        test_vars = ' '.join(detected_vars[1:3])
+                        cmd = f"T-TEST GROUPS={group_var}"
+                        cmd += f"\n  /VARIABLES={test_vars}"
+                        cmd += "\n  /CRITERIA=CI(.95)."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 'correlation':
+                    if len(detected_vars) >= 2:
+                        vars_str = ' '.join(detected_vars[:4])
+                        cmd = f"CORRELATIONS /VARIABLES={vars_str}"
+                        cmd += "\n  /PRINT=TWOTAIL NOSIG."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 'regression':
+                    if len(detected_vars) >= 2:
+                        dv = detected_vars[0]
+                        iv_list = ' '.join(detected_vars[1:4])
+                        cmd = f"REGRESSION"
+                        cmd += f"\n  /DEPENDENT {dv}"
+                        cmd += f"\n  /METHOD=ENTER {iv_list}."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 'confidence':
+                    for var in detected_vars[:2]:
+                        if '95%' in question.lower():
+                            cmd = f"EXAMINE VARIABLES={var}"
+                            cmd += "\n  /CINTERVAL 95"
+                            cmd += "\n  /PLOT NONE."
+                        elif '99%' in question.lower():
+                            cmd = f"EXAMINE VARIABLES={var}"
+                            cmd += "\n  /CINTERVAL 99"
+                            cmd += "\n  /PLOT NONE."
+                        else:
+                            cmd = f"EXAMINE VARIABLES={var}"
+                            cmd += "\n  /CINTERVAL 95"
+                            cmd += "\n  /PLOT NONE."
+                        
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+                
+                elif q_type == 'normality':
+                    for var in detected_vars[:2]:
+                        cmd = f"EXAMINE VARIABLES={var}"
+                        cmd += "\n  /PLOT NPPLOT"
+                        cmd += "\n  /STATISTICS DESCRIPTIVES."
+                        if cmd not in processed_commands:
+                            code_lines.append(cmd)
+                            processed_commands.append(cmd)
+            
+            # إذا لم يتم إنشاء أي أوامر
+            if not processed_commands:
+                vars_str = ' '.join(detected_vars[:3])
+                code_lines.append(f"DESCRIPTIVES VARIABLES={vars_str}")
+                code_lines.append("  /STATISTICS=MEAN STDDEV MIN MAX.")
+        
+        code_lines.append("EXECUTE.")
+        code_lines.append("")  # سطر فارغ لفصل الأسئلة
+        
+        return '\n'.join(code_lines), None
     
-    def create_variable_labels(self, df):
-        """إنشاء تسميات للمتغيرات"""
-        labels = []
-        for col in df.columns:
-            # تحويل اسم المتغير إلى تسمية مقروءة
-            label = col.replace('_', ' ').title()
-            labels.append(f"{col} '{label}'")
+    def generate_spss_header(self, df, data_analysis, filename):
+        """توليد رأس كود SPSS"""
+        header = f"""* =========================================================================
+* SPSS SYNTAX FILE
+* Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+* Data File: {filename}
+* Rows: {data_analysis['summary']['total_rows']}
+* Variables: {data_analysis['summary']['total_columns']}
+* =========================================================================
+
+* DATA DEFINITION AND SETUP
+"""
         
-        return "VARIABLE LABELS\n    " + " /".join(labels) + ".\n\n"
-    
-    def create_value_labels(self, df, var_info):
-        """إنشاء تسميات القيم للمتغيرات الفئوية"""
+        # تعريف المتغيرات
+        var_labels = []
+        for var_name, var_info in data_analysis['variables'].items():
+            label = var_name.replace('_', ' ').title()
+            var_labels.append(f"{var_name} '{label}'")
+        
+        header += "VARIABLE LABELS\n    " + " /".join(var_labels) + ".\n\n"
+        
+        # تسميات القيم للمتغيرات الفئوية
         value_labels = []
-        
-        for var, info in var_info.items():
-            if info['type'] == 'categorical' and info['unique_values'] <= 10:
-                # محاولة إعطاء تسميات ذكية
-                values = info['sample_values']
-                labels_line = f"    /{var} "
-                for i, val in enumerate(values[:5]):
-                    if isinstance(val, (int, float)):
-                        labels_line += f"{val} 'Value {val}' "
+        for var_name, var_info in data_analysis['variables'].items():
+            if var_info['subtype'] in ['categorical_numeric', 'categorical_text']:
+                if var_info.get('values') and len(var_info['values']) <= 10:
+                    line = f"    /{var_name} "
+                    if var_info['subtype'] == 'categorical_numeric':
+                        for val in var_info['values']:
+                            line += f"{val} 'Value {val}' "
                     else:
-                        labels_line += f"{i+1} '{val}' "
-                value_labels.append(labels_line.strip())
+                        for i, val in enumerate(var_info['values'][:5], 1):
+                            line += f"{i} '{val}' "
+                    value_labels.append(line.strip())
         
         if value_labels:
-            return "VALUE LABELS\n" + "\n".join(value_labels) + ".\n\n"
-        return ""
+            header += "VALUE LABELS\n"
+            header += "\n".join(value_labels)
+            header += ".\n\n"
+        
+        header += "EXECUTE.\n\n"
+        header += "* =========================================================================\n"
+        header += "* QUESTION ANALYSIS SECTION\n"
+        header += "* =========================================================================\n\n"
+        
+        return header
     
-    def parse_questions(self, text_content):
-        """تحليل الأسئلة من ملف النص"""
-        questions = []
-        lines = text_content.split('\n')
-        current_question = ""
-        
-        for line in lines:
-            line = line.strip()
-            
-            # التعرف على بداية سؤال جديد
-            if (re.match(r'^\d+[\.\)]', line) or 
-                re.match(r'^Q\d+:', line, re.IGNORECASE) or
-                re.match(r'^Question \d+:', line, re.IGNORECASE)):
-                
-                if current_question:
-                    questions.append(current_question.strip())
-                current_question = re.sub(r'^\d+[\.\)]\s*', '', line)
-                current_question = re.sub(r'^Q\d+:\s*', '', current_question, flags=re.IGNORECASE)
-                current_question = re.sub(r'^Question \d+:\s*', '', current_question, flags=re.IGNORECASE)
-            
-            elif current_question and line:
-                current_question += " " + line
-        
-        if current_question:
-            questions.append(current_question.strip())
-        
-        return [q for q in questions if q and len(q) > 5]
+    def create_download_link(self, content, filename, btn_text="📥 تنزيل"):
+        """إنشاء رابط تحميل"""
+        b64 = base64.b64encode(content.encode()).decode()
+        return f'<a href="data:file/txt;base64,{b64}" download="{filename}" style="text-decoration: none; padding: 10px 20px; background-color: #4CAF50; color: white; border-radius: 5px; font-weight: bold;">{btn_text} {filename}</a>'
 
 # التطبيق الرئيسي
 def main():
-    st.sidebar.title("⚙️ إعدادات المولد")
+    st.sidebar.title("⚙️ إعدادات التحليل")
     
-    # إضافة صورة أو شعار
-    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2103/2103655.png", width=100)
-    
-    # إعدادات التوليد
-    st.sidebar.subheader("خيارات التوليد")
+    # خيارات التحليل
+    st.sidebar.subheader("خيارات المعالجة")
+    auto_detect_types = st.sidebar.checkbox("الكشف التلقائي عن أنواع المتغيرات", value=True)
+    prevent_duplicates = st.sidebar.checkbox("منع تكرار التحليلات", value=True)
     include_comments = st.sidebar.checkbox("إضافة تعليقات توضيحية", value=True)
-    auto_detect_vars = st.sidebar.checkbox("الكشف التلقائي عن المتغيرات", value=True)
-    generate_all = st.sidebar.checkbox("توليد جميع أنواع التحليلات", value=False)
     
-    st.sidebar.subheader("تنسيق الإخراج")
+    st.sidebar.subheader("تخصيص الإخراج")
     output_format = st.sidebar.selectbox(
-        "نوع الإخراج",
-        ["SPSS Syntax (.sps)", "Text File (.txt)", "Both"]
+        "نوع الملف الناتج",
+        ["SPSS Syntax (.sps)", "Text File (.txt)", "Word Document (.docx)"]
     )
     
-    generator = UniversalSPSSGenerator()
+    # إنشاء المولد
+    generator = AdvancedSPSSGenerator()
     
     # القسم الرئيسي
-    st.markdown("---")
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.markdown("### 📁 تحميل الملفات")
+    with col2:
+        st.markdown("### ⚡ معالجة سريعة")
     
     # تحميل الملفات
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📊 تحميل ملف البيانات")
         data_file = st.file_uploader(
-            "اختر ملف Excel أو CSV",
+            "ملف البيانات (Excel/CSV)",
             type=['xlsx', 'xls', 'csv'],
-            key="data_file"
+            help="يمكن أن يكون ملف Excel أو CSV يحتوي على البيانات"
         )
     
     with col2:
-        st.subheader("📝 تحميل ملف الأسئلة")
         questions_file = st.file_uploader(
-            "اختر ملف نصي للأسئلة",
-            type=['txt', 'docx', 'pdf'],
-            key="questions_file"
+            "ملف الأسئلة (TXT)",
+            type=['txt'],
+            help="ملف نصي يحتوي على الأسئلة، سؤال في كل سطر"
         )
     
     if data_file and questions_file:
         try:
             # قراءة البيانات
             if data_file.name.endswith('.csv'):
-                df = pd.read_csv(data_file)
+                df = pd.read_csv(data_file, encoding='utf-8')
             else:
                 df = pd.read_excel(data_file)
             
             # قراءة الأسئلة
-            if questions_file.name.endswith('.txt'):
-                questions_text = questions_file.getvalue().decode('utf-8')
-            else:
-                # محاولة قراءة أنواع الملفات الأخرى
-                questions_text = str(questions_file.getvalue())
+            questions_text = questions_file.getvalue().decode('utf-8')
             
-            questions = generator.parse_questions(questions_text)
-            
-            # تحليل هيكل البيانات
-            var_info = generator.analyze_data_structure(df)
-            
-            st.success(f"""
-            ✅ تم تحميل البيانات بنجاح:
-            - عدد الأسئلة: {len(questions)}
-            - عدد المتغيرات: {len(df.columns)}
-            - عدد الصفوف: {len(df)}
-            """)
+            # تحليل البيانات
+            data_analysis = generator.analyze_dataset(df)
             
             # عرض معلومات البيانات
-            with st.expander("📊 معاينة البيانات وتحليل المتغيرات"):
-                tab1, tab2 = st.tabs(["معاينة البيانات", "تحليل المتغيرات"])
-                
-                with tab1:
-                    st.dataframe(df.head(10))
-                    st.caption(f"الأبعاد: {df.shape[0]} صف × {df.shape[1]} عمود")
-                
-                with tab2:
-                    for var, info in list(var_info.items())[:10]:
-                        st.write(f"**{var}**")
-                        st.json(info, expanded=False)
-                        st.write("---")
+            st.success(f"✅ تم تحميل البيانات بنجاح")
             
-            # عرض الأسئلة
-            with st.expander("📋 الأسئلة المحللة"):
-                for i, q in enumerate(questions, 1):
-                    classifications = generator.classify_question(q)
-                    detected_vars = generator.detect_variables_from_question(q, var_info)
-                    
-                    col1, col2 = st.columns([3, 1])
+            # عرض لوحة التحكم
+            with st.expander("📊 لوحة تحكم البيانات", expanded=True):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("عدد الصفوف", data_analysis['summary']['total_rows'])
+                with col2:
+                    st.metric("عدد المتغيرات", data_analysis['summary']['total_columns'])
+                with col3:
+                    st.metric("المتغيرات الكمية", len(data_analysis['summary']['numeric_vars']))
+                
+                st.write("**المتغيرات:**")
+                for var_name, var_info in list(data_analysis['variables'].items())[:10]:
+                    col1, col2, col3 = st.columns([2, 2, 1])
                     with col1:
-                        st.write(f"**{i}.** {q}")
+                        st.write(f"**{var_name}**")
                     with col2:
-                        st.caption(f"النوع: {', '.join(classifications)}")
+                        st.write(f"{var_info['type']} ({var_info['subtype']})")
+                    with col3:
+                        st.write(f"قيم: {var_info['unique_values']}")
+                
+                if len(data_analysis['variables']) > 10:
+                    st.write(f"... و {len(data_analysis['variables']) - 10} متغيرات أخرى")
+            
+            # معالجة الأسئلة
+            questions = []
+            lines = questions_text.split('\n')
+            current_q = ""
+            
+            for line in lines:
+                line = line.strip()
+                if re.match(r'^\d+[\.\)]', line) or re.match(r'^\d+\.\s+', line):
+                    if current_q:
+                        questions.append(current_q.strip())
+                    current_q = line
+                elif current_q and line and not line.startswith('*'):
+                    current_q += " " + line
+            
+            if current_q:
+                questions.append(current_q.strip())
+            
+            # تصفية الأسئلة الفارغة
+            questions = [q for q in questions if q and len(q) > 5]
+            
+            st.info(f"📋 تم تحليل {len(questions)} سؤال")
+            
+            # معاينة الأسئلة
+            with st.expander("👁️ معاينة الأسئلة وتحليلها"):
+                for i, q in enumerate(questions[:10], 1):
+                    classifications = generator.classify_question(q)
+                    detected_vars = generator.extract_variables_from_text(q, list(df.columns))
                     
-                    if detected_vars:
-                        st.caption(f"المتغيرات المكتشفة: {', '.join(detected_vars)}")
+                    st.write(f"**السؤال {i}:**")
+                    st.write(f"{q[:150]}{'...' if len(q) > 150 else ''}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if classifications:
+                            st.caption(f"**التصنيفات:** {', '.join(classifications)}")
+                    with col2:
+                        if detected_vars:
+                            st.caption(f"**المتغيرات:** {', '.join(detected_vars)}")
                     
                     st.write("---")
+                
+                if len(questions) > 10:
+                    st.write(f"... و {len(questions) - 10} أسئلة أخرى")
             
-            # زر توليد الكود
+            # زر المعالجة
             st.markdown("---")
-            if st.button("🚀 توليد كود SPSS", type="primary", use_container_width=True):
-                with st.spinner("جارٍ توليد كود SPSS المتخصص..."):
+            if st.button("🚀 معالجة جميع الأسئلة وتوليد الكود", type="primary", use_container_width=True):
+                
+                with st.spinner(f"جارٍ معالجة {len(questions)} سؤال..."):
                     
-                    # إنشاء رأس الكود
-                    header = f"""* ========================================================================
-* SPSS SYNTAX GENERATED BY UNIVERSAL SPSS GENERATOR
-* Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-* Dataset: {data_file.name}
-* Questions: {len(questions)}
-* Variables: {len(df.columns)}
-* ========================================================================
-
-* SETUP AND DATA DEFINITION
-"""
+                    # توليد الرأس
+                    spss_code = generator.generate_spss_header(df, data_analysis, data_file.name)
                     
-                    # إضافة تسميات المتغيرات
-                    header += generator.create_variable_labels(df)
+                    # معالجة كل سؤال
+                    skipped_questions = []
+                    question_stats = {
+                        'total': len(questions),
+                        'processed': 0,
+                        'skipped': 0
+                    }
                     
-                    # إضافة تسميات القيم
-                    value_labels = generator.create_value_labels(df, var_info)
-                    if value_labels:
-                        header += value_labels
-                    
-                    header += "EXECUTE.\n\n"
-                    
-                    # توليد كود لكل سؤال
-                    spss_code = header
+                    progress_bar = st.progress(0)
                     
                     for i, question in enumerate(questions, 1):
-                        detected_vars = generator.detect_variables_from_question(question, var_info)
-                        question_code = generator.generate_spss_syntax(question, var_info, detected_vars, i)
-                        spss_code += question_code
+                        # تحديث شريط التقدم
+                        progress_bar.progress(i / len(questions))
+                        
+                        # توليد كود للسؤال
+                        question_code, skip_reason = generator.generate_spss_for_question(
+                            i, question, df, data_analysis
+                        )
+                        
+                        if question_code:
+                            spss_code += question_code
+                            question_stats['processed'] += 1
+                        else:
+                            skipped_questions.append({
+                                'number': i,
+                                'question': question[:100],
+                                'reason': skip_reason
+                            })
+                            question_stats['skipped'] += 1
                     
-                    # إضافة قسم الإخراج
-                    spss_code += """* ========================================================================
-* OUTPUT MANAGEMENT
-* ========================================================================
-
-* Save output to file
-OUTPUT SAVE OUTFILE='SPSS_Output.spv'
-  /KEEP=ALL.
-
-* Save modified dataset
-SAVE OUTFILE='Analyzed_Data.sav'
-  /COMPRESSED.
-
-* Clear output viewer (optional)
-OUTPUT CLOSE ALL.
+                    # إضافة تذييل
+                    spss_code += f"""* =========================================================================
+* END OF ANALYSIS
+* Total Questions Processed: {question_stats['processed']}
+* Duplicate Questions Skipped: {question_stats['skipped']}
+* Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+* =========================================================================
 """
                     
-                    # عرض الكود
+                    # عرض النتائج
+                    st.success(f"✅ تم معالجة {question_stats['processed']} سؤال بنجاح")
+                    
+                    if skipped_questions:
+                        st.warning(f"⚠️ تم تخطي {question_stats['skipped']} سؤال لتجنب التكرار")
+                        with st.expander("عرض الأسئلة المتخطاة"):
+                            for skipped in skipped_questions:
+                                st.write(f"**السؤال {skipped['number']}:** {skipped['question']}")
+                                st.caption(f"السبب: {skipped['reason']}")
+                    
+                    # عرض الكود الناتج
                     st.subheader("📋 كود SPSS النهائي")
                     
-                    # خيارات عرض الكود
-                    show_full = st.checkbox("عرض الكود كاملاً", value=False)
+                    # خيارات العرض
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        show_full = st.checkbox("عرض الكود كاملاً", value=False)
                     
+                    # عرض الكود
                     if show_full:
-                        st.code(spss_code, language='text')
+                        st.code(spss_code, language='text', height=600)
                     else:
-                        # عرض عينة من الكود
                         code_lines = spss_code.split('\n')
-                        st.code('\n'.join(code_lines[:100]), language='text')
-                        if len(code_lines) > 100:
-                            st.info(f"عرض 100 سطر من أصل {len(code_lines)} سطر. تفعيل 'عرض الكود كاملاً' لرؤية الكود كاملاً.")
+                        st.code('\n'.join(code_lines[:200]), language='text')
+                        if len(code_lines) > 200:
+                            st.info(f"يتم عرض 200 سطر من أصل {len(code_lines)}. قم بتفعيل 'عرض الكود كاملاً' لرؤية الكود كاملاً.")
                     
-                    # تحميل الملفات
+                    # قسم التنزيل
                     st.markdown("---")
                     st.subheader("📥 تحميل الملفات")
                     
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        # ملف SPSS Syntax
-                        b64_sps = base64.b64encode(spss_code.encode()).decode()
-                        href_sps = f'<a href="data:file/sps;base64,{b64_sps}" download="SPSS_Analysis.sps" style="text-decoration: none; padding: 10px 20px; background-color: #4CAF50; color: white; border-radius: 5px; font-weight: bold;">📥 تنزيل ملف SPSS (.sps)</a>'
-                        st.markdown(href_sps, unsafe_allow_html=True)
+                        st.markdown(generator.create_download_link(
+                            spss_code, "SPSS_Analysis.sps", "📊"
+                        ), unsafe_allow_html=True)
                     
                     with col2:
-                        # ملف نصي
-                        b64_txt = base64.b64encode(spss_code.encode()).decode()
-                        href_txt = f'<a href="data:file/txt;base64,{b64_txt}" download="Analysis_Code.txt" style="text-decoration: none; padding: 10px 20px; background-color: #2196F3; color: white; border-radius: 5px; font-weight: bold;">📥 تنزيل ملف نصي (.txt)</a>'
-                        st.markdown(href_txt, unsafe_allow_html=True)
+                        # إنشاء ملف تقرير
+                        report = f"""تقرير تحليل SPSS
+تاريخ الإنشاء: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+الملف: {data_file.name}
+عدد الأسئلة: {len(questions)}
+عدد الأسئلة المعالجة: {question_stats['processed']}
+عدد الأسئلة المتخطاة: {question_stats['skipped']}
+
+تفاصيل الأسئلة المعالجة:
+"""
+                        for i, (fingerprint, info) in enumerate(generator.processed_questions.items(), 1):
+                            report += f"""
+{i}. السؤال {info['number']}:
+   - المحتوى: {info['question']}
+   - المتغيرات: {', '.join(info['variables'])}
+   - الأنواع: {', '.join(info['types'])}
+"""
+                        
+                        st.markdown(generator.create_download_link(
+                            report, "Analysis_Report.txt", "📄"
+                        ), unsafe_allow_html=True)
                     
                     with col3:
-                        # ملف تعليمات
-                        instructions = f"""# تعليمات استخدام كود SPSS
-تاريخ الإنشاء: {datetime.now().strftime('%Y-%m-%d')}
-عدد الأسئلة: {len(questions)}
-
-## خطوات التنفيذ:
+                        # إنشاء ملف تعليمات
+                        instructions = f"""تعليمات استخدام كود SPSS:
 1. افتح برنامج SPSS
-2. قم بتحميل بياناتك (ملف البيانات الأصلي)
-3. انتقل إلى Window → Syntax Editor
+2. قم بتحميل ملف البيانات: {data_file.name}
+3. افتح محرر الصيغ (Syntax Editor)
 4. الصق الكود المرفق
 5. حدد الكود كاملاً (Ctrl+A)
-6. اضغط F5 أو انقر على Run (السهم الأخضر)
+6. اضغط F5 أو انقر على زر التشغيل
+7. افحص نافذة الإخراج (Output) للنتائج
 
-## ملاحظات مهمة:
-- تأكد من تطابق أسماء المتغيرات
-- قم بحفظ الملفات قبل البدء
-- راجع الإخراج (Output) للنتائج
+ملاحظات:
+- الكود يعالج {question_stats['processed']} سؤال
+- تم تجنب تكرار {question_stats['skipped']} سؤال
+- كل سؤال له تحليل فريد ومختلف
 """
-                        b64_inst = base64.b64encode(instructions.encode()).decode()
-                        href_inst = f'<a href="data:file/txt;base64,{b64_inst}" download="Instructions.txt" style="text-decoration: none; padding: 10px 20px; background-color: #FF9800; color: white; border-radius: 5px; font-weight: bold;">📥 تعليمات الاستخدام</a>'
-                        st.markdown(href_inst, unsafe_allow_html=True)
+                        
+                        st.markdown(generator.create_download_link(
+                            instructions, "Instructions.txt", "📝"
+                        ), unsafe_allow_html=True)
                     
-                    # نصائح وأفكار
-                    with st.expander("💡 نصائح وتحسينات"):
-                        st.markdown("""
-                        ### لتحسين النتائج:
-                        1. **تسمية المتغيرات بشكل واضح**: استخدم أسماء دالة على المحتوى
-                        2. **تحديد المتغيرات في الأسئلة**: اذكر أسماء المتغيرات صراحة في الأسئلة
-                        3. **التنظيم**: رتب الأسئلة بشكل منطقي
+                    # عرض إحصائيات التحليل
+                    with st.expander("📈 إحصائيات التحليل"):
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("الأسئلة المعالجة", question_stats['processed'])
+                        with col2:
+                            st.metric("المتغيرات المستخدمة", len(df.columns))
+                        with col3:
+                            st.metric("أنواع التحليلات", len(set([
+                                t for q in generator.processed_questions.values() 
+                                for t in q['types']
+                            ])))
                         
-                        ### للتحليلات المتقدمة:
-                        - إذا كان السؤال عن مقارنة المجموعات، اذكر اسم متغير المجموعة
-                        - إذا كان عن الارتباط، اذكر المتغيرين المراد قياس العلاقة بينهما
-                        - إذا كان عن الانحدار، حدد المتغير التابع والمستقل
+                        # عرض توزيع أنواع الأسئلة
+                        type_counts = {}
+                        for q_info in generator.processed_questions.values():
+                            for q_type in q_info['types']:
+                                type_counts[q_type] = type_counts.get(q_type, 0) + 1
                         
-                        ### أمثلة على صياغة الأسئلة:
-                        - "احسب المتوسط والانحراف المعياري لمتغير الدخل (Income)"
-                        - "ارسم مخططاً شريطياً يوضح توزيع النوع (Gender)"
-                        - "اختبر إذا كان هناك فرق ذو دلالة في العمر (Age) بين المجموعتين (Group)"
-                        """)
+                        st.write("**توزيع أنواع التحليلات:**")
+                        for t_type, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+                            st.write(f"- {t_type}: {count} سؤال")
         
         except Exception as e:
-            st.error(f"حدث خطأ: {str(e)}")
+            st.error(f"❌ حدث خطأ: {str(e)}")
             st.exception(e)
     
     else:
         # واجهة الترحيب
         st.info("""
-        ## 🎯 مرحباً بك في مولد أكواد SPSS الشامل
+        ## 🎯 مرحباً بك في مولد أكواد SPSS المتقدم
+        
+        **المميزات الجديدة:**
+        ✅ **معالجة جميع الأسئلة** - كل سؤال يحصل على تحليل فريد
+        ✅ **منع التكرار** - نظام بصمات يمنع تكرار نفس التحليل
+        ✅ **تحليل ذكي** - اكتشاف تلقائي للمتغيرات والأنواع
+        ✅ **إحصائيات مفصلة** - تقارير عن الأسئلة المعالجة والمتخطاة
         
         **كيفية الاستخدام:**
-        1. **قم بتحميل ملف البيانات** (Excel أو CSV)
-        2. **قم بتحميل ملف الأسئلة** (ملف نصي)
-        3. **اضغط على زر "توليد كود SPSS"**
+        1. **حمّل ملف البيانات** (Excel أو CSV)
+        2. **حمّل ملف الأسئلة** (ملف نصي)
+        3. **اضغط على زر المعالجة**
         4. **حمل الملفات الناتجة**
         
-        **المميزات:**
-        - ✅ يدعم أي نوع من الامتحانات الإحصائية
-        - ✅ يحلل البيانات تلقائياً
-        - ✅ يتعرف على أنواع الأسئلة المختلفة
-        - ✅ يكتشف المتغيرات المذكورة في الأسئلة
-        - ✅ يولد كود SPSS جاهز للتنفيذ
-        - ✅ يدعم جميع أنواع التحليلات الإحصائية
-        
-        **أنواع التحليلات المدعومة:**
-        - الإحصاءات الوصفية
-        - الجداول التكرارية
-        - اختبارات T
-        - تحليل التباين (ANOVA)
-        - الارتباط والانحدار
-        - اختبارات مربع كاي
-        - الرسوم البيانية بأنواعها
-        - فترات الثقة
-        - اختبارات الطبيعية
+        **البرنامج يتعامل مع:**
+        - أي عدد من الأسئلة
+        - أي تنسيق للبيانات
+        - جميع أنواع التحليلات الإحصائية
+        - اكتشاف تلقائي للمتغيرات المذكورة في الأسئلة
         """)
         
-        # أمثلة على تنسيق الأسئلة
+        # أمثلة توضيحية
         with st.expander("📚 أمثلة على تنسيق الأسئلة"):
             st.markdown("""
-            ### مثال 1: أسئلة وصفية
+            ### مثال لمجموعة أسئلة متنوعة:
             ```
             1. احسب المتوسط والانحراف المعياري للعمر والدخل
-            2. أنشئ جدولاً تكرارياً للنوع والتعليم
-            3. ارسم مخططاً شريطياً يوضح توزيع المناصب
-            ```
-            
-            ### مثال 2: أسئلة استدلالية
-            ```
-            4. اختبر إذا كان هناك فرق في الراتب بين الذكور والإناث
+            2. أنشئ جدولاً تكرارياً للنوع والمستوى التعليمي
+            3. ارسم مخططاً شريطياً يوضح متوسط الدخل حسب النوع
+            4. اختبر إذا كان هناك فرق في العمر بين الذكور والإناث
             5. افحص العلاقة بين سنوات الخبرة والدخل
-            6. حلل تأثير العمر والتعليم على الراتب
+            6. ارسم مخططاً مبعثراً للعمر مقابل الدخل
+            7. أنشئ فترات ثقة 95% للدخل
+            8. افحص توزيع العمر للتحقق من الطبيعي
+            9. احسب الارتباط بين جميع المتغيرات الكمية
+            10. حلل تأثير النوع والتعليم على الدخل
             ```
             
-            ### مثال 3: أسئلة بيانية
-            ```
-            7. ارسم مخططاً دائرياً لتوزيع النوع
-            8. أنشئ مخططاً مبعثراً للعلاقة بين العمر والدخل
-            9. ارسم مخططاً صندوقياً للرواتب حسب القسم
-            ```
+            **الملاحظة:** كل سؤال سوف يحصل على تحليل فريد ومختلف!
             """)
         
-        # مثال تجريبي
-        with st.expander("🔬 جرب مثالاً تجريبياً"):
-            if st.button("تحميل بيانات تجريبية"):
-                # إنشاء بيانات تجريبية
-                np.random.seed(42)
-                sample_data = pd.DataFrame({
-                    'Age': np.random.randint(20, 60, 100),
-                    'Salary': np.random.normal(5000, 1500, 100),
-                    'Gender': np.random.choice(['Male', 'Female'], 100),
-                    'Education': np.random.choice(['High School', 'Bachelor', 'Master', 'PhD'], 100),
-                    'Experience': np.random.randint(1, 30, 100),
-                    'Department': np.random.choice(['Sales', 'IT', 'HR', 'Finance'], 100)
-                })
-                
-                sample_questions = """1. Calculate descriptive statistics for Age and Salary
-2. Create frequency tables for Gender and Education
-3. Test if there is a significant difference in Salary between genders
-4. Examine the relationship between Experience and Salary
-5. Draw a bar chart showing average Salary by Department
-6. Create a scatter plot of Age vs Salary
-7. Perform regression analysis with Salary as dependent variable"""
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**البيانات التجريبية:**")
-                    st.dataframe(sample_data.head())
-                with col2:
-                    st.write("**الأسئلة التجريبية:**")
-                    st.text(sample_questions)
+        # زر تجريبي
+        if st.button("🔄 تشغيل مثال تجريبي", type="secondary"):
+            # إنشاء بيانات تجريبية
+            np.random.seed(42)
+            sample_data = pd.DataFrame({
+                'العمر': np.random.randint(20, 60, 50),
+                'الدخل': np.random.normal(5000, 1500, 50),
+                'النوع': np.random.choice(['ذكر', 'أنثى'], 50),
+                'المستوى_التعليمي': np.random.choice(['ثانوي', 'بكالوريوس', 'ماجستير', 'دكتوراه'], 50),
+                'سنوات_الخبرة': np.random.randint(1, 30, 50),
+                'القسم': np.random.choice(['مبيعات', 'تكنولوجيا', 'موارد بشرية', 'مالية'], 50)
+            })
+            
+            sample_questions = """1. احسب الإحصاءات الوصفية للعمر والدخل
+2. أنشئ جداول تكرارية للنوع والمستوى التعليمي
+3. ارسم مخططاً شريطياً لمتوسط الدخل حسب النوع
+4. اختبر فرق العمر بين الذكور والإناث
+5. افحص الارتباط بين العمر والدخل
+6. ارسم مخططاً مبعثراً للعمر مقابل الدخل
+7. احسب فترات ثقة 95% للدخل
+8. افحص توزيع العمر
+9. حلل تأثير النوع على الدخل
+10. ارسم مخططاً صندوقياً للدخل حسب القسم"""
+            
+            st.success("تم تحميل المثال التجريبي بنجاح!")
+            st.write("**البيانات التجريبية:**")
+            st.dataframe(sample_data)
+            st.write("**الأسئلة التجريبية:**")
+            st.text(sample_questions)
 
 if __name__ == "__main__":
     main()
