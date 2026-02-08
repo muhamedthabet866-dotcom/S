@@ -6,810 +6,851 @@ import tempfile
 import os
 import re
 import math
+from typing import Dict, List, Tuple, Any
+import warnings
+warnings.filterwarnings('ignore')
 
 # إعداد صفحة Streamlit
 st.set_page_config(
-    page_title="SPSS Model Solution Generator",
-    page_icon="📘",
+    page_title="Dynamic SPSS Solver",
+    page_icon="🧠",
     layout="wide"
 )
 
-st.title("📘 مولد الحل النموذجي لـ SPSS")
-st.markdown("### توليد حل نموذجي كامل للامتحانات الإحصائية")
+st.title("🧠 محلل SPSS الديناميكي المتقدم")
+st.markdown("### حل تلقائي لأي امتحان إحصائي مع أي بيانات")
 
-def generate_model_solution(df):
-    """توليد الحل النموذجي بناءً على البيانات"""
+# ===== المحلل الديناميكي =====
+
+class DynamicSPSSAnalyzer:
+    """محلل ديناميكي لأي بيانات وأي أسئلة"""
     
-    # تحليل البيانات
-    n_cases = len(df)
-    k_rule_classes = math.ceil(math.log2(n_cases)) + 1
+    def __init__(self, df: pd.DataFrame, questions_text: str):
+        self.df = df
+        self.questions_text = questions_text
+        self.variable_info = self._analyze_variables()
+        self.questions = self._parse_questions()
+        self.question_mappings = self._build_question_mappings()
+        
+    def _analyze_variables(self) -> Dict:
+        """تحليل تلقائي لجميع المتغيرات"""
+        variable_info = {}
+        
+        for col in self.df.columns:
+            col_str = str(col).strip()
+            var_data = self.df[col].dropna()
+            
+            info = {
+                'name': col_str,
+                'original_name': col_str,
+                'dtype': str(self.df[col].dtype),
+                'n_unique': len(var_data.unique()),
+                'missing': self.df[col].isna().sum(),
+                'total': len(self.df[col]),
+                'unique_values': sorted(var_data.unique().tolist()) if len(var_data.unique()) <= 20 else [],
+                'is_numeric': pd.api.types.is_numeric_dtype(self.df[col])
+            }
+            
+            # التخمين التلقائي لنوع المتغير
+            if info['is_numeric']:
+                if info['n_unique'] <= 10 and max(var_data.unique()) <= 10:
+                    info['stat_type'] = 'CATEGORICAL'
+                    info['measurement_level'] = 'NOMINAL'
+                else:
+                    info['stat_type'] = 'CONTINUOUS'
+                    info['measurement_level'] = 'SCALE'
+                    info['stats'] = {
+                        'mean': float(var_data.mean()),
+                        'std': float(var_data.std()),
+                        'min': float(var_data.min()),
+                        'max': float(var_data.max()),
+                        'median': float(var_data.median())
+                    }
+            else:
+                info['stat_type'] = 'STRING'
+                info['measurement_level'] = 'NOMINAL'
+            
+            # تخمين معنى المتغير من اسمه
+            info['inferred_meaning'] = self._infer_variable_meaning(col_str, info)
+            
+            # تخمين تسميات القيم
+            if info['stat_type'] == 'CATEGORICAL' and info['unique_values']:
+                info['value_labels'] = self._guess_value_labels(col_str, info['unique_values'])
+            
+            variable_info[col_str] = info
+        
+        return variable_info
     
-    # حساب الإحصائيات الأساسية
-    x1_stats = {
-        'mean': df['X1'].mean() if 'X1' in df.columns else 0,
-        'median': df['X1'].median() if 'X1' in df.columns else 0,
-        'min': df['X1'].min() if 'X1' in df.columns else 0,
-        'max': df['X1'].max() if 'X1' in df.columns else 0,
-        'range': (df['X1'].max() - df['X1'].min()) if 'X1' in df.columns else 0
-    }
+    def _infer_variable_meaning(self, var_name: str, info: Dict) -> str:
+        """تخمين معنى المتغير من اسمه وقيمه"""
+        var_lower = var_name.lower()
+        
+        # قائمة الأنماط المعروفة
+        patterns = {
+            'age': ['age', 'عمر', 'سن', 'العمر'],
+            'salary': ['salary', 'مرتب', 'راتب', 'دخل', 'income'],
+            'gender': ['gender', 'جنس', 'sex', 'ذكر', 'أنثى'],
+            'city': ['city', 'مدينة', 'محافظة', 'region'],
+            'year': ['year', 'سنة', 'عام', 'تاريخ'],
+            'balance': ['balance', 'رصيد', 'account'],
+            'transaction': ['transaction', 'معاملة', 'عملية'],
+            'service': ['service', 'خدمة'],
+            'card': ['card', 'بطاقة', 'debit'],
+            'interest': ['interest', 'فائدة'],
+            'score': ['score', 'درجة', 'mark'],
+            'count': ['count', 'عدد', 'number'],
+            'percentage': ['percentage', 'نسبة', 'percent'],
+            'rate': ['rate', 'معدل', 'نسبة'],
+            'category': ['category', 'فئة', 'type']
+        }
+        
+        for meaning, keywords in patterns.items():
+            for keyword in keywords:
+                if keyword in var_lower:
+                    return meaning
+        
+        # التخمين من القيم
+        if info['is_numeric']:
+            if info['n_unique'] == 2 and set(info['unique_values']) == {0, 1}:
+                return 'binary_indicator'
+            elif 0 <= info['n_unique'] <= 5:
+                return 'categorical_code'
+        
+        return 'unknown'
     
-    x2_stats = {
-        'mean': df['X2'].mean() if 'X2' in df.columns else 0,
-        'median': df['X2'].median() if 'X2' in df.columns else 0,
-        'min': df['X2'].min() if 'X2' in df.columns else 0,
-        'max': df['X2'].max() if 'X2' in df.columns else 0
-    }
+    def _guess_value_labels(self, var_name: str, values: List) -> Dict:
+        """تخمين تسميات القيم الفئوية"""
+        var_lower = var_name.lower()
+        labels = {}
+        
+        for val in values:
+            if isinstance(val, (int, float)):
+                # أنماط ثنائية (نعم/لا)
+                if val == 0:
+                    labels[val] = "No/False/Female"
+                elif val == 1:
+                    labels[val] = "Yes/True/Male"
+                elif val == 2:
+                    labels[val] = "Other/Sometimes"
+                # أنماط الجنس
+                elif 'gender' in var_lower or 'sex' in var_lower:
+                    if val == 1:
+                        labels[val] = "Male"
+                    elif val == 2:
+                        labels[val] = "Female"
+                # أنماط الموافقة
+                elif any(word in var_lower for word in ['agree', 'satisfy', 'rate']):
+                    if val == 1:
+                        labels[val] = "Strongly Disagree"
+                    elif val == 2:
+                        labels[val] = "Disagree"
+                    elif val == 3:
+                        labels[val] = "Neutral"
+                    elif val == 4:
+                        labels[val] = "Agree"
+                    elif val == 5:
+                        labels[val] = "Strongly Agree"
+                else:
+                    labels[val] = f"Category {val}"
+            else:
+                labels[val] = str(val)
+        
+        return labels
     
-    # توليد كود SPSS النموذجي
-    spss_code = f"""* Encoding: UTF-8.
-
-* [PRE-ANALYSIS SETUP] Defining Variable Labels and Values.
-VARIABLE LABELS 
-    X1 "Account Balance ($)" 
-    X2 "ATM Transactions" 
-    X3 "Other Services" 
-    X4 "Debit Card Holder" 
-    X5 "Interest Received" 
-    X6 "City Location".
-VALUE LABELS 
-    X4 
-        0 "No" 
-        1 "Yes" 
-    /X5 
-        0 "No" 
-        1 "Yes" 
-    /X6 
-        1 "City 1" 
-        2 "City 2" 
-        3 "City 3" 
-        4 "City 4".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 1: Frequency Tables for Categorical Variables".
-* -------------------------------------------------------------------------.
-FREQUENCIES VARIABLES=X4 X5 X6 
-  /ORDER=ANALYSIS.
-ECHO "INTERPRETATION: This table shows the distribution of debit cards, interest reception, and city locations".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 2: Account Balance Frequency with Classes & Comment".
-* -------------------------------------------------------------------------.
-* Creating 5 classes for account balance based on data range
-RECODE X1 
-    (LOWEST thru 500=1) 
-    (500.01 thru 1000=2) 
-    (1000.01 thru 1500=3) 
-    (1500.01 thru 2000=4) 
-    (2000.01 thru HIGHEST=5) 
-    INTO X1_Classes.
-VARIABLE LABELS X1_Classes "Account Balance Classes".
-VALUE LABELS X1_Classes 
-    1 "0-500" 
-    2 "501-1000" 
-    3 "1001-1500" 
-    4 "1501-2000" 
-    5 "Over 2000".
-FREQUENCIES VARIABLES=X1_Classes 
-  /FORMAT=AVALUE 
-  /ORDER=ANALYSIS.
-ECHO "COMMENT: This distribution reveals the wealth concentration among the bank clients".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 3: ATM Transactions Frequency (K-Rule Calculation)".
-* -------------------------------------------------------------------------.
-* K-rule: 2^k >= n where n = {n_cases} cases
-* 2^{k_rule_classes} = {2**k_rule_classes} >= {n_cases}, so {k_rule_classes} classes are optimal.
-RECODE X2 
-    ({df['X2'].min() if 'X2' in df.columns else 0} thru {df['X2'].quantile(0.17) if 'X2' in df.columns else 5}=1) 
-    ({df['X2'].quantile(0.17)+0.01 if 'X2' in df.columns else 5.01} thru {df['X2'].quantile(0.33) if 'X2' in df.columns else 9}=2) 
-    ({df['X2'].quantile(0.33)+0.01 if 'X2' in df.columns else 9.01} thru {df['X2'].quantile(0.5) if 'X2' in df.columns else 13}=3) 
-    ({df['X2'].quantile(0.5)+0.01 if 'X2' in df.columns else 13.01} thru {df['X2'].quantile(0.67) if 'X2' in df.columns else 17}=4) 
-    ({df['X2'].quantile(0.67)+0.01 if 'X2' in df.columns else 17.01} thru {df['X2'].quantile(0.83) if 'X2' in df.columns else 21}=5) 
-    ({df['X2'].quantile(0.83)+0.01 if 'X2' in df.columns else 21.01} thru {df['X2'].max() if 'X2' in df.columns else 25}=6) 
-    INTO X2_Krule.
-VARIABLE LABELS X2_Krule "ATM Transactions (K-Rule Classes)".
-VALUE LABELS X2_Krule 
-    1 "Class 1" 
-    2 "Class 2" 
-    3 "Class 3" 
-    4 "Class 4" 
-    5 "Class 5" 
-    6 "Class 6".
-FREQUENCIES VARIABLES=X2_Krule 
-  /ORDER=ANALYSIS.
-ECHO "COMMENT: Based on the K-rule with {n_cases} cases, {k_rule_classes} classes provide a clear view of transaction intensity".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 4: Descriptive Statistics for X1 and X2".
-* -------------------------------------------------------------------------.
-DESCRIPTIVES VARIABLES=X1 X2 
-  /STATISTICS=MEAN MEDIAN MODE MINIMUM MAXIMUM RANGE VARIANCE STDDEV SKEWNESS SESKEW.
-EXECUTE.
-
-* Additional detailed analysis
-MEANS TABLES=X1 X2 
-  /CELLS=MEAN MEDIAN MODE COUNT STDDEV MIN MAX.
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 5: Histograms for Account Balance and ATM Transactions".
-* -------------------------------------------------------------------------.
-GRAPH 
-  /HISTOGRAM=X1 
-  /TITLE="Histogram of Account Balance".
-EXECUTE.
-
-GRAPH 
-  /HISTOGRAM=X2 
-  /TITLE="Histogram of ATM Transactions".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 6: Skewness Discussion (Left, Right, Symmetric)".
-* -------------------------------------------------------------------------.
-* Calculate actual skewness for interpretation
-COMPUTE X1_Skew = (3*(MEAN(X1) - MEDIAN(X1))) / SD(X1).
-COMPUTE X2_Skew = (3*(MEAN(X2) - MEDIAN(X2))) / SD(X2).
-FORMATS X1_Skew X2_Skew (F8.3).
-DESCRIPTIVES VARIABLES=X1_Skew X2_Skew 
-  /STATISTICS=MEAN.
-EXECUTE.
-
-ECHO "ANALYSIS FOR X1 (Account Balance):".
-ECHO "   Mean: {x1_stats['mean']:.2f}, Median: {x1_stats['median']:.2f}".
-ECHO "   If Mean > Median: Right-Skewed (positive skew)".
-ECHO "   If Mean < Median: Left-Skewed (negative skew)".
-ECHO "   If Mean ≈ Median: Symmetric distribution".
-ECHO "".
-ECHO "ANALYSIS FOR X2 (ATM Transactions):".
-ECHO "   Mean: {x2_stats['mean']:.2f}, Median: {x2_stats['median']:.2f}".
-ECHO "   Check the relationship between mean and median for skewness direction".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 7: Statistics (Q4) for Each City".
-* -------------------------------------------------------------------------.
-SORT CASES BY X6.
-SPLIT FILE SEPARATE BY X6.
-DESCRIPTIVES VARIABLES=X1 X2 
-  /STATISTICS=MEAN MEDIAN MODE MIN MAX RANGE VAR STDDEV SKEW.
-SPLIT FILE OFF.
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 8: Statistics (Q4) for Debit Card Holders vs Non-Holders".
-* -------------------------------------------------------------------------.
-SORT CASES BY X4.
-SPLIT FILE SEPARATE BY X4.
-DESCRIPTIVES VARIABLES=X1 X2 
-  /STATISTICS=MEAN MEDIAN MODE MIN MAX RANGE VAR STDDEV SKEW.
-SPLIT FILE OFF.
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 9: Bar Chart - Average Account Balance per City".
-* -------------------------------------------------------------------------.
-MEANS TABLES=X1 BY X6 
-  /CELLS=MEAN COUNT STDDEV.
-EXECUTE.
-
-GRAPH 
-  /BAR(SIMPLE)=MEAN(X1) BY X6 
-  /TITLE="Average Account Balance by City".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 10: Bar Chart - Max Transactions by Debit Card Status".
-* -------------------------------------------------------------------------.
-MEANS TABLES=X2 BY X4 
-  /CELLS=MAX COUNT.
-EXECUTE.
-
-GRAPH 
-  /BAR(SIMPLE)=MAX(X2) BY X4 
-  /TITLE="Maximum ATM Transactions by Debit Card Status".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 11: Clustered Bar - Avg Balance by City & Debit Status".
-* -------------------------------------------------------------------------.
-MEANS TABLES=X1 BY X6 BY X4 
-  /CELLS=MEAN COUNT.
-EXECUTE.
-
-GRAPH 
-  /BAR(GROUPED)=MEAN(X1) BY X6 BY X4 
-  /TITLE="Average Balance by City and Debit Card Status".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 12: Bar Chart - Percentage of Customers Receiving Interest".
-* -------------------------------------------------------------------------.
-FREQUENCIES VARIABLES=X5 
-  /BARCHART PERCENT 
-  /ORDER=ANALYSIS.
-EXECUTE.
-
-GRAPH 
-  /BAR(SIMPLE)=PCT BY X5 
-  /TITLE="Percentage of Interest Receivers vs Non-Receivers".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 13: Pie Chart - Percentage of Interest Receivers".
-* -------------------------------------------------------------------------.
-GRAPH 
-  /PIE=PCT BY X5 
-  /TITLE="Market Share: Customers Receiving Interest (%)".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 14: Confidence Intervals (95% and 99%) for X1".
-* -------------------------------------------------------------------------.
-EXAMINE VARIABLES=X1 
-  /STATISTICS DESCRIPTIVES 
-  /CINTERVAL 95 
-  /PLOT NONE.
-EXECUTE.
-
-EXAMINE VARIABLES=X1 
-  /STATISTICS DESCRIPTIVES 
-  /CINTERVAL 99 
-  /PLOT NONE.
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 15: Normality Test & Empirical vs Chebyshev Rule".
-* -------------------------------------------------------------------------.
-EXAMINE VARIABLES=X1 
-  /PLOT NPPLOT 
-  /STATISTICS DESCRIPTIVES.
-EXECUTE.
-
-* Shapiro-Wilk test for normality
-DATASET DECLARE NormalityTest.
-OMS /SELECT TABLES /IF COMMANDS=['Explore'] SUBTYPES=['Tests of Normality']
-  /DESTINATION FORMAT=SAV NUMBERED=TableNumber_ OUTFILE='NormalityTest'.
-EXAMINE VARIABLES=X1 /PLOT NPPLOT.
-OMSEND.
-
-ECHO "RULE APPLICATION:".
-ECHO "   1. Check Shapiro-Wilk Significance value from Tests of Normality table".
-ECHO "   2. If Sig. > 0.05: Data is normally distributed → Use Empirical Rule".
-ECHO "   3. If Sig. < 0.05: Data is not normal → Use Chebyshev's Rule".
-ECHO "".
-ECHO "Empirical Rule (Normal Distribution):".
-ECHO "   - 68% within Mean ± 1SD".
-ECHO "   - 95% within Mean ± 2SD". 
-ECHO "   - 99.7% within Mean ± 3SD".
-ECHO "".
-ECHO "Chebyshev's Rule (Any Distribution):".
-ECHO "   - At least 75% within Mean ± 2SD".
-ECHO "   - At least 89% within Mean ± 3SD".
-ECHO "   - At least 94% within Mean ± 4SD".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 16: Outliers and Extreme Values for Account Balance".
-* -------------------------------------------------------------------------.
-EXAMINE VARIABLES=X1 
-  /PLOT BOXPLOT 
-  /STATISTICS DESCRIPTIVES EXTREME.
-EXECUTE.
-
-* Calculate outliers using IQR method
-COMPUTE Q1 = PCT(X1, 25).
-COMPUTE Q3 = PCT(X1, 75).
-COMPUTE IQR = Q3 - Q1.
-COMPUTE Lower_Bound = Q1 - 1.5*IQR.
-COMPUTE Upper_Bound = Q3 + 1.5*IQR.
-COMPUTE Outlier = (X1 < Lower_Bound) OR (X1 > Upper_Bound).
-FREQUENCIES VARIABLES=Outlier.
-EXECUTE.
-
-ECHO "OUTLIER ANALYSIS:".
-ECHO "   1. Check the Boxplot for data points outside the whiskers".
-ECHO "   2. Extreme values are marked with asterisks (*) or circles (o)".
-ECHO "   3. IQR Method: Values below Q1-1.5*IQR or above Q3+1.5*IQR are outliers".
-ECHO "   4. Based on the analysis above, {df['X1'].count() if 'X1' in df.columns else 'N/A'} cases were analyzed".
-EXECUTE.
-
-* -------------------------------------------------------------------------.
-TITLE "SUMMARY AND INTERPRETATION".
-* -------------------------------------------------------------------------.
-ECHO "SUMMARY OF FINDINGS:".
-ECHO "   1. Dataset contains {n_cases} bank customers with 6 variables".
-ECHO "   2. Account balance ranges from ${x1_stats['min']:.0f} to ${x1_stats['max']:.0f}".
-ECHO "   3. Skewness analysis reveals the distribution shape of financial data".
-ECHO "   4. Confidence intervals provide range estimates for population parameters".
-ECHO "   5. Outlier detection helps identify unusual account balances".
-ECHO "".
-ECHO "RECOMMENDATIONS:".
-ECHO "   1. Consider customer segmentation based on balance and transaction patterns".
-ECHO "   2. Monitor outliers for potential fraud or data entry errors".
-ECHO "   3. Use findings for targeted marketing and service improvements".
-EXECUTE.
-
-* Cleanup
-DATASET CLOSE ALL.
-EXECUTE.
-
-* ==================== END OF MODEL SOLUTION ====================
-"""
+    def _parse_questions(self) -> List[Dict]:
+        """تحليل ديناميكي للأسئلة"""
+        questions = []
+        
+        # أنماط متعددة لاستخراج الأسئلة
+        patterns = [
+            r'(\d+)[\.\)]\s*(.*?)(?=\d+[\.\)]|$)',  # 1. أو 1)
+            r'Q(\d+)[:\-]\s*(.*?)(?=Q\d+[:\.\-]|$)',  # Q1: أو Q1-
+            r'Question\s*(\d+)[:\-]\s*(.*?)(?=Question\s*\d+[:\.\-]|$)',  # Question 1:
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, self.questions_text, re.DOTALL | re.IGNORECASE)
+            for match in matches:
+                q_num = match.group(1).strip()
+                q_text = match.group(2).strip()
+                
+                # تنظيف النص
+                q_text = re.sub(r'\s+', ' ', q_text)
+                q_text = q_text.replace('\n', ' ').strip()
+                
+                if q_text and len(q_text) > 5:
+                    questions.append({
+                        'number': int(q_num),
+                        'text': q_text[:200],
+                        'full_text': q_text,
+                        'detected_type': 'unknown'
+                    })
+        
+        # إذا لم نجد أسئلة مرقمة، نقسم النص إلى فقرات
+        if not questions:
+            paragraphs = self.questions_text.split('\n')
+            for i, para in enumerate(paragraphs):
+                para = para.strip()
+                if para and len(para) > 20:
+                    questions.append({
+                        'number': i + 1,
+                        'text': para[:150],
+                        'full_text': para,
+                        'detected_type': 'unknown'
+                    })
+        
+        # تحديد نوع كل سؤال
+        for q in questions:
+            q['detected_type'] = self._detect_question_type(q['full_text'])
+            q['variables'] = self._extract_variables_from_text(q['full_text'])
+            q['conditions'] = self._extract_conditions(q['full_text'])
+            q['analysis_method'] = self._determine_analysis_method(q)
+        
+        return sorted(questions, key=lambda x: x['number'])
     
-    return spss_code
-
-def generate_enhanced_solution(df):
-    """توليد حل محسن مع تفسيرات إضافية"""
+    def _detect_question_type(self, text: str) -> str:
+        """تحديد نوع السؤال تلقائياً"""
+        text_lower = text.lower()
+        
+        type_patterns = {
+            'frequency': ['frequency table', 'جدول تكراري', 'توزيع تكراري', 'construct frequency'],
+            'descriptive': ['mean', 'median', 'mode', 'standard deviation', 'مقاييس', 'calculate', 'احسب'],
+            'bar_chart': ['bar chart', 'رسم بياني عمودي', 'مخطط عمودي', 'draw bar'],
+            'pie_chart': ['pie chart', 'رسم دائري', 'مخطط دائري', 'draw pie'],
+            'histogram': ['histogram', 'مدرج تكراري', 'رسم مدرج'],
+            'scatter': ['scatter plot', 'مخطط انتشار', 'رسم انتشار'],
+            'boxplot': ['box plot', 'مخطط الصندوق', 'صندوقي'],
+            'confidence': ['confidence interval', 'فترة ثقة', 'confidence'],
+            't_test': ['t-test', 'اختبار تي', 't test', 'اختبار t'],
+            'anova': ['anova', 'تحليل التباين', 'analysis of variance'],
+            'correlation': ['correlation', 'ارتباط', 'علاقة'],
+            'regression': ['regression', 'انحدار', 'linear model'],
+            'chi_square': ['chi-square', 'كاي مربع', 'chi square'],
+            'normality': ['normality', 'طبيعية', 'shapiro', 'kolmogorov'],
+            'outliers': ['outliers', 'قيم متطرفة', 'extreme values'],
+            'cross_tab': ['cross tabulation', 'جدول متقاطع', 'crosstab'],
+            'clustering': ['cluster', 'تجميع', 'grouping'],
+            'factor': ['factor analysis', 'تحليل العوامل'],
+            'reliability': ['reliability', 'موثوقية', 'cronbach'],
+        }
+        
+        for q_type, keywords in type_patterns.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    return q_type
+        
+        return 'descriptive'  # إفتراضي
     
-    # حساب الإحصائيات المتقدمة
-    if 'X1' in df.columns and 'X4' in df.columns:
-        balance_by_card = df.groupby('X4')['X1'].agg(['mean', 'std', 'count'])
-    else:
-        balance_by_card = pd.DataFrame({'mean': [0, 0], 'std': [0, 0], 'count': [0, 0]})
+    def _extract_variables_from_text(self, text: str) -> List[str]:
+        """استخراج المتغيرات المذكورة في النص"""
+        found_vars = []
+        text_lower = text.lower()
+        
+        # البحث عن أسماء المتغيرات مباشرة
+        for var_name in self.variable_info.keys():
+            var_lower = var_name.lower()
+            
+            # البحث بالاسم
+            if var_lower in text_lower:
+                found_vars.append(var_name)
+            
+            # البحث بالمعنى المستنتج
+            elif self.variable_info[var_name]['inferred_meaning'] != 'unknown':
+                meaning = self.variable_info[var_name]['inferred_meaning']
+                meaning_keywords = {
+                    'age': ['age', 'عمر', 'سن'],
+                    'salary': ['salary', 'مرتب', 'راتب'],
+                    'gender': ['gender', 'جنس', 'ذكر', 'أنثى'],
+                    'city': ['city', 'مدينة', 'محافظة'],
+                    'balance': ['balance', 'رصيد', 'account'],
+                    'transaction': ['transaction', 'معاملة'],
+                    'service': ['service', 'خدمة'],
+                    'card': ['card', 'بطاقة'],
+                    'interest': ['interest', 'فائدة']
+                }
+                
+                if meaning in meaning_keywords:
+                    for keyword in meaning_keywords[meaning]:
+                        if keyword in text_lower:
+                            found_vars.append(var_name)
+                            break
+        
+        # إذا لم نجد متغيرات، نستخدم المتغيرات المناسبة تلقائياً
+        if not found_vars:
+            # نختار المتغيرات بناءً على نوع السؤال
+            q_type = self._detect_question_type(text)
+            
+            if q_type in ['frequency', 'categorical']:
+                # متغيرات فئوية
+                found_vars = [v for v, info in self.variable_info.items() 
+                            if info['stat_type'] == 'CATEGORICAL'][:3]
+            elif q_type in ['descriptive', 'continuous']:
+                # متغيرات مستمرة
+                found_vars = [v for v, info in self.variable_info.items() 
+                            if info['stat_type'] == 'CONTINUOUS'][:3]
+            else:
+                # مزيج
+                categorical_vars = [v for v, info in self.variable_info.items() 
+                                  if info['stat_type'] == 'CATEGORICAL'][:2]
+                continuous_vars = [v for v, info in self.variable_info.items() 
+                                 if info['stat_type'] == 'CONTINUOUS'][:2]
+                found_vars = categorical_vars + continuous_vars
+        
+        return list(set(found_vars))[:5]  # الحد الأقصى 5 متغيرات
     
-    solution = f"""* =========================================================================
-* ENHANCED SPSS MODEL SOLUTION WITH DETAILED INTERPRETATIONS
-* Dataset Analysis: {len(df)} cases, {len(df.columns)} variables
+    def _extract_conditions(self, text: str) -> List[Dict]:
+        """استخراج الشروط من النص"""
+        conditions = []
+        text_lower = text.lower()
+        
+        # شروط زمنية
+        time_patterns = [
+            (r'before (\d{4})', 'before_year'),
+            (r'after (\d{4})', 'after_year'),
+            (r'in (\d{4})', 'in_year'),
+            (r'from (\d{4}) to (\d{4})', 'between_years')
+        ]
+        
+        # شروط مقارنة
+        comp_patterns = [
+            (r'greater than (\d+)', 'greater_than'),
+            (r'less than (\d+)', 'less_than'),
+            (r'equal to (\d+)', 'equal_to'),
+            (r'between (\d+) and (\d+)', 'between'),
+            (r'more than (\d+)', 'greater_than'),
+            (r'at least (\d+)', 'at_least'),
+            (r'at most (\d+)', 'at_most')
+        ]
+        
+        # شروط فئوية
+        cat_patterns = [
+            (r'male', 'gender_male'),
+            (r'female', 'gender_female'),
+            (r'yes', 'yes'),
+            (r'no', 'no'),
+            (r'urban', 'urban'),
+            (r'rural', 'rural')
+        ]
+        
+        for pattern, cond_type in time_patterns + comp_patterns + cat_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                condition = {'type': cond_type}
+                
+                if cond_type == 'between_years':
+                    condition['value'] = [int(match.group(1)), int(match.group(2))]
+                elif cond_type == 'between':
+                    condition['value'] = [int(match.group(1)), int(match.group(2))]
+                elif match.groups():
+                    condition['value'] = int(match.group(1))
+                else:
+                    condition['value'] = match.group(0)
+                
+                conditions.append(condition)
+        
+        return conditions
+    
+    def _determine_analysis_method(self, question: Dict) -> str:
+        """تحديد طريقة التحليل المناسبة"""
+        q_type = question['detected_type']
+        variables = question['variables']
+        
+        if not variables:
+            return 'DESCRIPTIVES'
+        
+        # بناء على نوع المتغيرات
+        var_types = [self.variable_info[v]['stat_type'] for v in variables if v in self.variable_info]
+        
+        if q_type == 'frequency':
+            return 'FREQUENCIES'
+        elif q_type == 'descriptive':
+            return 'DESCRIPTIVES'
+        elif q_type == 'bar_chart':
+            if len(variables) >= 2:
+                return 'GRAPH_BAR_GROUPED'
+            else:
+                return 'GRAPH_BAR_SIMPLE'
+        elif q_type == 'pie_chart':
+            return 'GRAPH_PIE'
+        elif q_type == 'histogram':
+            return 'GRAPH_HISTOGRAM'
+        elif q_type == 't_test':
+            if len(variables) >= 2:
+                return 'T_TEST_INDEPENDENT'
+            else:
+                return 'T_TEST_ONE_SAMPLE'
+        elif q_type == 'anova':
+            return 'ONEWAY_ANOVA'
+        elif q_type == 'correlation':
+            return 'CORRELATIONS'
+        elif q_type == 'regression':
+            return 'REGRESSION'
+        elif q_type == 'chi_square':
+            return 'CROSSTABS_CHISQ'
+        else:
+            # التخمين بناءً على المتغيرات
+            if all(t == 'CONTINUOUS' for t in var_types):
+                return 'CORRELATIONS'
+            elif all(t == 'CATEGORICAL' for t in var_types):
+                return 'CROSSTABS'
+            else:
+                return 'MEANS'
+    
+    def _build_question_mappings(self) -> Dict:
+        """بناء خرائط للأسئلة الشائعة"""
+        mappings = {
+            'frequency_tables': {
+                'keywords': ['frequency', 'تكراري', 'جدول'],
+                'method': 'FREQUENCIES',
+                'template': 'FREQUENCIES VARIABLES={vars}\n  /ORDER=ANALYSIS.'
+            },
+            'descriptive_stats': {
+                'keywords': ['mean', 'median', 'mode', 'متوسط', 'وسيط', 'منوال'],
+                'method': 'DESCRIPTIVES',
+                'template': 'DESCRIPTIVES VARIABLES={vars}\n  /STATISTICS=MEAN MEDIAN MODE STDDEV MIN MAX.'
+            },
+            'compare_groups': {
+                'keywords': ['compare', 'مقارنة', 'between groups', 'بين مجموعات'],
+                'method': 'MEANS',
+                'template': 'MEANS TABLES={dv} BY {iv}\n  /CELLS=MEAN COUNT STDDEV.'
+            },
+            'relationship': {
+                'keywords': ['relationship', 'علاقة', 'correlation', 'ارتباط'],
+                'method': 'CORRELATIONS',
+                'template': 'CORRELATIONS\n  /VARIABLES={vars}\n  /PRINT=TWOTAIL NOSIG.'
+            }
+        }
+        return mappings
+    
+    def generate_spss_syntax(self) -> str:
+        """توليد كود SPSS ديناميكي"""
+        
+        syntax = f"""* =========================================================================
+* DYNAMIC SPSS SOLUTION GENERATOR
+* Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+* Dataset: {len(self.df.columns)} variables, {len(self.df)} cases
+* Questions analyzed: {len(self.questions)}
 * =========================================================================
 
-* -------------------------------------------------------------------------
-* SECTION A: DATA PREPARATION AND QUALITY CHECK
-* -------------------------------------------------------------------------
-
-* Check for missing values
-MISSING VALUES ALL (-9999).
-MISSING VALUES X1 TO X6 ().
-
-DESCRIPTIVES VARIABLES=ALL
-  /STATISTICS=MEAN STDDEV MIN MAX.
-EXECUTE.
-
-* Count missing per variable
-COUNT MISS_X1 = X1 (MISSING).
-COUNT MISS_X2 = X2 (MISSING).
-COUNT MISS_X3 = X3 (MISSING).
-COUNT MISS_X4 = X4 (MISSING).
-COUNT MISS_X5 = X5 (MISSING).
-COUNT MISS_X6 = X6 (MISSING).
-FREQUENCIES VARIABLES=MISS_X1 TO MISS_X6
-  /FORMAT=NOTABLE.
-EXECUTE.
-
-ECHO "DATA QUALITY REPORT:".
-ECHO "   Total cases: {len(df)}".
-ECHO "   Complete cases: {df.notna().all(axis=1).sum() if not df.empty else 0}".
-ECHO "   Missing values will be handled using pairwise deletion in analyses".
-EXECUTE.
+DATASET NAME DynamicData WINDOW=FRONT.
+DATASET ACTIVATE DynamicData.
 
 * -------------------------------------------------------------------------
-* SECTION B: COMPREHENSIVE FREQUENCY ANALYSIS (Questions 1-3)
+* VARIABLE DEFINITION AND PREPARATION
 * -------------------------------------------------------------------------
 
-TITLE "COMPREHENSIVE FREQUENCY DISTRIBUTIONS".
-
-* 1. Basic frequencies
-FREQUENCIES VARIABLES=X4 X5 X6
-  /FORMAT=DFREQ
-  /BARCHART FREQ
-  /ORDER=ANALYSIS.
-EXECUTE.
-
-* 2. Account balance with optimal class calculation
-COMPUTE Range_X1 = {df['X1'].max() if 'X1' in df.columns else 0} - {df['X1'].min() if 'X1' in df.columns else 0}.
-COMPUTE Classes_X1 = RND(SQRT({len(df)})).
-FORMATS Classes_X1 (F2.0).
-EXECUTE.
-
-ECHO "OPTIMAL CLASS CALCULATION FOR X1:".
-ECHO "   Range: {df['X1'].max() - df['X1'].min() if 'X1' in df.columns else 0:.2f}".
-ECHO "   Square root rule: √{len(df)} ≈ {np.sqrt(len(df)):.1f} classes".
-ECHO "   Sturge's rule: 1 + 3.322*log10({len(df)}) ≈ {1 + 3.322*np.log10(len(df)) if len(df) > 0 else 0:.1f} classes".
-EXECUTE.
-
-* 3. Enhanced recoding with visual bins
-RECODE X1
-  (MISSING=SYSMIS)
-  (LOWEST thru {df['X1'].quantile(0.2) if 'X1' in df.columns else 500}=1)
-  ({df['X1'].quantile(0.2)+0.01 if 'X1' in df.columns else 500.01} thru {df['X1'].quantile(0.4) if 'X1' in df.columns else 1000}=2)
-  ({df['X1'].quantile(0.4)+0.01 if 'X1' in df.columns else 1000.01} thru {df['X1'].quantile(0.6) if 'X1' in df.columns else 1500}=3)
-  ({df['X1'].quantile(0.6)+0.01 if 'X1' in df.columns else 1500.01} thru {df['X1'].quantile(0.8) if 'X1' in df.columns else 2000}=4)
-  ({df['X1'].quantile(0.8)+0.01 if 'X1' in df.columns else 2000.01} thru HIGHEST=5)
-  INTO Balance_Quin.
-VARIABLE LABELS Balance_Quin "Account Balance Quintiles".
-VALUE LABELS Balance_Quin
-  1 "Bottom 20%"
-  2 "20-40%"
-  3 "40-60%"
-  4 "60-80%"
-  5 "Top 20%".
-FREQUENCIES VARIABLES=Balance_Quin
-  /PIECHART
-  /ORDER=ANALYSIS.
-EXECUTE.
-
+* Variable labels based on inferred meanings\n"""
+        
+        # تعريف المتغيرات
+        for var_name, info in self.variable_info.items():
+            label = info.get('inferred_meaning', var_name).title()
+            syntax += f'VARIABLE LABELS {var_name} "{label}".\n'
+            syntax += f'VARIABLE LEVEL {var_name} ({info["measurement_level"]}).\n'
+            
+            if 'value_labels' in info and info['value_labels']:
+                syntax += f'VALUE LABELS {var_name}\n'
+                for val, lbl in info['value_labels'].items():
+                    syntax += f'  {val} "{lbl}"\n'
+                syntax += '.\n'
+        
+        syntax += "\nEXECUTE.\n"
+        
+        # إنشاء متغيرات مشتقة إذا لزم الأمر
+        syntax += self._generate_derived_variables()
+        
+        # حل كل سؤال
+        syntax += "\n* -------------------------------------------------------------------------"
+        syntax += "\n* QUESTION SOLUTIONS"
+        syntax += "\n* -------------------------------------------------------------------------\n"
+        
+        for q in self.questions:
+            syntax += self._generate_question_solution(q)
+        
+        # تحليلات إضافية تلقائية
+        syntax += self._generate_auto_analyses()
+        
+        # إنهاء
+        syntax += """
 * -------------------------------------------------------------------------
-* SECTION C: ADVANCED DESCRIPTIVE ANALYSIS (Questions 4-8)
+* CLEANUP AND SAVE
 * -------------------------------------------------------------------------
-
-TITLE "ADVANCED DESCRIPTIVE AND COMPARATIVE ANALYSIS".
-
-* 4. Complete descriptive with percentiles
-FREQUENCIES VARIABLES=X1 X2
-  /FORMAT=NOTABLE
-  /STATISTICS=MEAN MEDIAN MODE SUM STDDEV VARIANCE MINIMUM MAXIMUM RANGE 
-              SKEWNESS SESKEW KURTOSIS SEKURT PERCENTILES(5 25 50 75 95).
-EXECUTE.
-
-* 5. Comparative statistics by groups
-DO IF (X6 = 1).
-  COMPUTE City1_X1 = X1.
-  COMPUTE City1_X2 = X2.
-ELSE IF (X6 = 2).
-  COMPUTE City2_X1 = X1.
-  COMPUTE City2_X2 = X2.
-ELSE IF (X6 = 3).
-  COMPUTE City3_X1 = X1.
-  COMPUTE City3_X2 = X2.
-ELSE IF (X6 = 4).
-  COMPUTE City4_X1 = X1.
-  COMPUTE City4_X2 = X2.
-END IF.
-EXECUTE.
-
-DESCRIPTIVES VARIABLES=City1_X1 City2_X1 City3_X1 City4_X1
-  /STATISTICS=MEAN STDDEV MIN MAX.
-EXECUTE.
-
-* 6. Boxplot comparisons
-EXAMINE VARIABLES=X1 BY X6
-  /PLOT=BOXPLOT
-  /STATISTICS=NONE
-  /NOTOTAL.
-EXECUTE.
-
-* -------------------------------------------------------------------------
-* SECTION D: GRAPHICAL ANALYSIS ENHANCEMENT (Questions 9-13)
-* -------------------------------------------------------------------------
-
-TITLE "ENHANCED GRAPHICAL REPRESENTATIONS".
-
-* 9. Enhanced bar chart with error bars
-GRAPH
-  /BAR(SIMPLE)=MEAN(X1) BY X6
-  /ERRORBAR=CI(95)
-  /TITLE="Average Balance by City with 95% Confidence Intervals".
-EXECUTE.
-
-* 10. Multiple comparison chart
-GRAPH
-  /BAR(GROUPED)=MEAN(X1) MEAN(X2) BY X4
-  /TITLE="Comparison of Balance and Transactions by Debit Card Status".
-EXECUTE.
-
-* 11. 3D visualization of relationships
-* Note: For advanced visualization, use Chart Builder in SPSS GUI
-ECHO "FOR 3D VISUALIZATION:".
-ECHO "   1. Go to Graphs → Chart Builder".
-ECHO "   2. Choose 3D Bar chart".
-ECHO "   3. Drag X6 to X-axis, X4 to Y-axis, and MEAN(X1) to Z-axis".
-EXECUTE.
-
-* -------------------------------------------------------------------------
-* SECTION E: STATISTICAL INFERENCE (Questions 14-16)
-* -------------------------------------------------------------------------
-
-TITLE "STATISTICAL INFERENCE AND HYPOTHESIS TESTING".
-
-* 14. Advanced confidence interval analysis
-EXAMINE VARIABLES=X1
-  /PLOT=NONE
-  /STATISTICS=DESCRIPTIVES EXTREME
-  /CINTERVAL=95
-  /ID= CASE.
-EXECUTE.
-
-* Calculate confidence interval manually for understanding
-COMPUTE SE_X1 = SD(X1) / SQRT({len(df)}).
-COMPUTE CI_Lower_95 = MEAN(X1) - 1.96 * SE_X1.
-COMPUTE CI_Upper_95 = MEAN(X1) + 1.96 * SE_X1.
-COMPUTE CI_Lower_99 = MEAN(X1) - 2.576 * SE_X1.
-COMPUTE CI_Upper_99 = MEAN(X1) + 2.576 * SE_X1.
-FORMATS CI_Lower_95 CI_Upper_95 CI_Lower_99 CI_Upper_99 (F10.2).
-LIST VARIABLES=CI_Lower_95 CI_Upper_95 CI_Lower_99 CI_Upper_99
-  /CASES=FROM 1 TO 1.
-EXECUTE.
-
-* 15. Comprehensive normality assessment
-EXAMINE VARIABLES=X1 X2
-  /PLOT=NPPLOT HISTOGRAM
-  /COMPARE VARIABLE
-  /STATISTICS=DESCRIPTIVES
-  /CINTERVAL=95
-  /ID= CASE.
-EXECUTE.
-
-* Multiple normality tests
-DATASET DECLARE NormalityResults.
-OMS /SELECT TABLES /IF COMMANDS=['Explore'] SUBTYPES=['Tests of Normality','Descriptives']
-  /DESTINATION FORMAT=SAV OUTFILE='NormalityResults'.
-EXAMINE VARIABLES=X1 X2 /PLOT NPPLOT.
-OMSEND.
-
-ECHO "NORMALITY INTERPRETATION GUIDE:".
-ECHO "   Kolmogorov-Smirnov: Good for large samples (>50)".
-ECHO "   Shapiro-Wilk: Good for small to medium samples".
-ECHO "   Q-Q Plot: Visual check - points should follow diagonal line".
-ECHO "   Histogram: Should resemble bell curve for normal distribution".
-EXECUTE.
-
-* 16. Sophisticated outlier detection
-* Method 1: Z-score method
-COMPUTE Z_X1 = (X1 - MEAN(X1)) / SD(X1).
-COMPUTE Outlier_Z = (ABS(Z_X1) > 3).
-VALUE LABELS Outlier_Z 0 "Normal" 1 "Outlier".
-FREQUENCIES VARIABLES=Outlier_Z.
-EXECUTE.
-
-* Method 2: Modified Z-score (robust to outliers)
-COMPUTE Median_X1 = MEDIAN(X1).
-COMPUTE MAD_X1 = MEDIAN(ABS(X1 - Median_X1)).
-COMPUTE Modified_Z = 0.6745 * (X1 - Median_X1) / MAD_X1.
-COMPUTE Outlier_ModifiedZ = (ABS(Modified_Z) > 3.5).
-FREQUENCIES VARIABLES=Outlier_ModifiedZ.
-EXECUTE.
-
-* Method 3: Tukey's fences
-COMPUTE Q1_X1 = PCT(X1, 25).
-COMPUTE Q3_X1 = PCT(X1, 75).
-COMPUTE IQR_X1 = Q3_X1 - Q1_X1.
-COMPUTE Lower_Fence = Q1_X1 - 1.5 * IQR_X1.
-COMPUTE Upper_Fence = Q3_X1 + 1.5 * IQR_X1.
-COMPUTE Outlier_Tukey = (X1 < Lower_Fence) OR (X1 > Upper_Fence).
-FREQUENCIES VARIABLES=Outlier_Tukey.
-EXECUTE.
-
-ECHO "OUTLIER DETECTION SUMMARY:".
-ECHO "   Three methods used: Z-score, Modified Z-score, and Tukey's fences".
-ECHO "   Compare results to identify consistent outliers".
-ECHO "   Consider business context before removing outliers".
-EXECUTE.
-
-* -------------------------------------------------------------------------
-* SECTION F: ADDITIONAL ANALYSES (Bonus Insights)
-* -------------------------------------------------------------------------
-
-TITLE "ADDITIONAL INSIGHTS AND CORRELATION ANALYSIS".
-
-* Correlation matrix
-CORRELATIONS
-  /VARIABLES=X1 X2 X3
-  /PRINT=TWOTAIL NOSIG
-  /MISSING=PAIRWISE.
-EXECUTE.
-
-* Scatterplot matrix for visualization
-GRAPH
-  /SCATTERPLOT(MATRIX)=X1 X2 X3
-  /MISSING=LISTWISE.
-EXECUTE.
-
-* Regression analysis for prediction
-REGRESSION
-  /MISSING LISTWISE
-  /STATISTICS COEFF OUTS R ANOVA
-  /CRITERIA=PIN(.05) POUT(.10)
-  /NOORIGIN
-  /DEPENDENT X1
-  /METHOD=ENTER X2 X3.
-EXECUTE.
-
-* -------------------------------------------------------------------------
-* SECTION G: REPORT GENERATION AND EXPORT
-* -------------------------------------------------------------------------
-
-TITLE "FINAL REPORT AND DATA EXPORT".
-
-* Create summary dataset
-AGGREGATE
-  /OUTFILE='SummaryStats.sav'
-  /BREAK=X6 X4
-  /X1_Mean = MEAN(X1)
-  /X1_SD = SD(X1)
-  /X2_Mean = MEAN(X2)
-  /X2_SD = SD(X2)
-  /N_Cases = N.
-EXECUTE.
-
-* Export results to Excel
-SAVE TRANSLATE OUTFILE='Banking_Analysis_Results.xlsx'
-  /TYPE=XLS
-  /VERSION=12
-  /MAP
-  /REPLACE
-  /FIELDNAMES
-  /CELLS=VALUES.
-EXECUTE.
-
-ECHO "ANALYSIS COMPLETE - KEY FINDINGS:".
-ECHO "   1. Dataset successfully analyzed with multiple statistical methods".
-ECHO "   2. Results exported to Excel for further reporting".
-ECHO "   3. All 16 questions addressed with appropriate SPSS syntax".
-ECHO "   4. Additional insights provided for comprehensive understanding".
-ECHO "".
-ECHO "RECOMMENDED NEXT STEPS:".
-ECHO "   1. Review outlier cases for data quality".
-ECHO "   2. Conduct hypothesis testing based on observed patterns".
-ECHO "   3. Create dashboard using exported summary statistics".
-EXECUTE.
 
 DATASET CLOSE ALL.
+SAVE OUTFILE='Dynamic_Analysis_Results.sav'
+  /COMPRESSED.
 EXECUTE.
 
-* ==================== END OF ENHANCED SOLUTION ====================
+* ==================== END OF DYNAMIC SOLUTION ====================
 """
+        
+        return syntax
     
-    return solution
+    def _generate_derived_variables(self) -> str:
+        """توليد متغيرات مشتقة تلقائياً"""
+        syntax = "\n* Derived variables for analysis\n"
+        
+        for var_name, info in self.variable_info.items():
+            if info['stat_type'] == 'CONTINUOUS':
+                # إنشاء فئات للمتغيرات المستمرة
+                syntax += f"\n* Creating categories for {var_name}\n"
+                syntax += f"IF ({var_name} < {info['stats']['mean']}) {var_name}_Cat = 1.\n"
+                syntax += f"IF ({var_name} >= {info['stats']['mean']}) {var_name}_Cat = 2.\n"
+                syntax += f"VARIABLE LABELS {var_name}_Cat 'Categories of {var_name}'.\n"
+                syntax += f"VALUE LABELS {var_name}_Cat\n"
+                syntax += f"  1 'Below Average'\n"
+                syntax += f"  2 'Above Average'\n"
+                syntax += f".\n"
+        
+        syntax += "EXECUTE.\n"
+        return syntax
+    
+    def _generate_question_solution(self, question: Dict) -> str:
+        """توليد حل لسؤال معين"""
+        q_num = question['number']
+        q_text = question['text']
+        q_type = question['detected_type']
+        variables = question['variables']
+        method = question['analysis_method']
+        
+        syntax = f"\n* QUESTION {q_num}: {q_text}\n"
+        syntax += f"* Detected Type: {q_type}\n"
+        syntax += f"* Variables: {', '.join(variables) if variables else 'Auto-selected'}\n"
+        syntax += f"* Method: {method}\n"
+        
+        # توليد الكود المناسب
+        if method == 'FREQUENCIES':
+            if variables:
+                syntax += f"FREQUENCIES VARIABLES={' '.join(variables)}\n"
+                syntax += "  /BARCHART FREQ\n"
+                syntax += "  /ORDER=ANALYSIS.\n"
+        
+        elif method == 'DESCRIPTIVES':
+            if variables:
+                syntax += f"DESCRIPTIVES VARIABLES={' '.join(variables)}\n"
+                syntax += "  /STATISTICS=MEAN MEDIAN MODE STDDEV MIN MAX SKEWNESS.\n"
+        
+        elif method == 'GRAPH_BAR_SIMPLE':
+            if variables:
+                syntax += f"GRAPH\n"
+                syntax += f"  /BAR(SIMPLE)=COUNT BY {variables[0]}\n"
+                syntax += f"  /TITLE='Bar Chart of {variables[0]}'.\n"
+        
+        elif method == 'GRAPH_BAR_GROUPED':
+            if len(variables) >= 2:
+                syntax += f"GRAPH\n"
+                syntax += f"  /BAR(GROUPED)=MEAN({variables[1]}) BY {variables[0]}\n"
+                syntax += f"  /TITLE='Grouped Bar: {variables[1]} by {variables[0]}'.\n"
+        
+        elif method == 'GRAPH_PIE':
+            if variables:
+                syntax += f"GRAPH\n"
+                syntax += f"  /PIE=PCT BY {variables[0]}\n"
+                syntax += f"  /TITLE='Pie Chart of {variables[0]}'.\n"
+        
+        elif method == 'GRAPH_HISTOGRAM':
+            if variables:
+                for var in variables[:2]:
+                    if self.variable_info[var]['stat_type'] == 'CONTINUOUS':
+                        syntax += f"GRAPH\n"
+                        syntax += f"  /HISTOGRAM={var}\n"
+                        syntax += f"  /TITLE='Histogram of {var}'.\n"
+        
+        elif method == 'T_TEST_ONE_SAMPLE':
+            if variables:
+                syntax += f"T-TEST\n"
+                syntax += f"  /TESTVAL=0\n"
+                syntax += f"  /VARIABLES={variables[0]}\n"
+                syntax += f"  /CRITERIA=CI(.95).\n"
+        
+        elif method == 'T_TEST_INDEPENDENT':
+            if len(variables) >= 2:
+                syntax += f"T-TEST GROUPS={variables[0]}\n"
+                syntax += f"  /VARIABLES={variables[1]}\n"
+                syntax += f"  /CRITERIA=CI(.95).\n"
+        
+        elif method == 'ONEWAY_ANOVA':
+            if len(variables) >= 2:
+                syntax += f"ONEWAY {variables[1]} BY {variables[0]}\n"
+                syntax += f"  /STATISTICS DESCRIPTIVES\n"
+                syntax += f"  /MISSING ANALYSIS.\n"
+        
+        elif method == 'CORRELATIONS':
+            if len(variables) >= 2:
+                syntax += f"CORRELATIONS\n"
+                syntax += f"  /VARIABLES={' '.join(variables[:4])}\n"
+                syntax += f"  /PRINT=TWOTAIL NOSIG.\n"
+        
+        elif method == 'REGRESSION':
+            if len(variables) >= 2:
+                syntax += f"REGRESSION\n"
+                syntax += f"  /DEPENDENT {variables[0]}\n"
+                syntax += f"  /METHOD=ENTER {' '.join(variables[1:3])}\n"
+                syntax += f"  /STATISTICS COEFF R ANOVA.\n"
+        
+        elif method == 'CROSSTABS':
+            if len(variables) >= 2:
+                syntax += f"CROSSTABS\n"
+                syntax += f"  /TABLES={variables[0]} BY {variables[1]}\n"
+                syntax += f"  /CELLS=COUNT ROW COLUMN.\n"
+        
+        elif method == 'MEANS':
+            if len(variables) >= 2:
+                syntax += f"MEANS TABLES={variables[1]} BY {variables[0]}\n"
+                syntax += f"  /CELLS=MEAN COUNT STDDEV.\n"
+        
+        else:
+            # حل عام
+            if variables:
+                syntax += f"DESCRIPTIVES VARIABLES={' '.join(variables[:3])}\n"
+                syntax += f"  /STATISTICS=MEAN STDDEV MIN MAX.\n"
+        
+        syntax += "EXECUTE.\n"
+        return syntax
+    
+    def _generate_auto_analyses(self) -> str:
+        """توليد تحليلات تلقائية إضافية"""
+        syntax = "\n* -------------------------------------------------------------------------"
+        syntax += "\n* AUTOMATIC ADDITIONAL ANALYSES"
+        syntax += "\n* -------------------------------------------------------------------------\n"
+        
+        # العثور على المتغيرات المستمرة والفئوية
+        continuous_vars = [v for v, info in self.variable_info.items() 
+                         if info['stat_type'] == 'CONTINUOUS']
+        categorical_vars = [v for v, info in self.variable_info.items() 
+                          if info['stat_type'] == 'CATEGORICAL']
+        
+        # 1. تحليل وصفي شامل
+        if continuous_vars:
+            syntax += "\n* Comprehensive descriptive analysis\n"
+            syntax += f"DESCRIPTIVES VARIABLES={' '.join(continuous_vars[:5])}\n"
+            syntax += "  /STATISTICS=MEAN STDDEV MIN MAX SKEWNESS KURTOSIS.\n"
+            syntax += "EXECUTE.\n"
+        
+        # 2. تحليل الارتباطات
+        if len(continuous_vars) >= 2:
+            syntax += "\n* Correlation matrix\n"
+            syntax += f"CORRELATIONS\n"
+            syntax += f"  /VARIABLES={' '.join(continuous_vars[:4])}\n"
+            syntax += "  /PRINT=TWOTAIL NOSIG.\n"
+            syntax += "EXECUTE.\n"
+        
+        # 3. تحليل التكرارات
+        if categorical_vars:
+            syntax += "\n* Frequency analysis for categorical variables\n"
+            syntax += f"FREQUENCIES VARIABLES={' '.join(categorical_vars[:3])}\n"
+            syntax += "  /BARCHART FREQ\n"
+            syntax += "  /ORDER=ANALYSIS.\n"
+            syntax += "EXECUTE.\n"
+        
+        # 4. تحليل العلاقات بين المتغيرات
+        if continuous_vars and categorical_vars:
+            syntax += "\n* Means comparison by categories\n"
+            syntax += f"MEANS TABLES={continuous_vars[0]} BY {categorical_vars[0]}\n"
+            syntax += "  /CELLS=MEAN COUNT STDDEV.\n"
+            syntax += "EXECUTE.\n"
+        
+        # 5. تحليل القيم المتطرفة
+        if continuous_vars:
+            syntax += "\n* Outlier detection\n"
+            syntax += f"EXAMINE VARIABLES={continuous_vars[0]}\n"
+            syntax += "  /PLOT=BOXPLOT\n"
+            syntax += "  /STATISTICS=EXTREME\n"
+            syntax += "  /NOTOTAL.\n"
+            syntax += "EXECUTE.\n"
+        
+        return syntax
 
 # ===== واجهة Streamlit =====
 
 def main():
     # شريط جانبي
     with st.sidebar:
-        st.header("⚙️ إعدادات التوليد")
+        st.header("📁 رفع الملفات")
         
-        # رفع ملف البيانات
-        excel_file = st.file_uploader(
-            "📊 رفع ملف البيانات (Excel)",
-            type=['xls', 'xlsx', 'csv']
+        # رفع ملفات متعددة
+        uploaded_files = st.file_uploader(
+            "رفع ملفات البيانات والأسئلة",
+            type=['xls', 'xlsx', 'csv', 'docx', 'doc', 'txt'],
+            accept_multiple_files=True,
+            help="يمكنك رفع عدة ملفات: Excel للبيانات، Word للأسئلة"
         )
         
         st.markdown("---")
         
-        st.subheader("🎯 نوع الحل المطلوب")
-        solution_type = st.radio(
-            "اختر نوع الحل:",
-            ["📘 الحل النموذجي الأساسي", "🚀 الحل المحسن المتقدم"]
-        )
+        # اختيار الملفات
+        data_file = None
+        questions_file = None
+        
+        if uploaded_files:
+            for file in uploaded_files:
+                if file.name.lower().endswith(('.xls', '.xlsx', '.csv')):
+                    data_file = file
+                elif file.name.lower().endswith(('.docx', '.doc', '.txt')):
+                    questions_file = file
+        
+        if data_file:
+            st.success(f"📊 ملف البيانات: {data_file.name}")
+        if questions_file:
+            st.success(f"📝 ملف الأسئلة: {questions_file.name}")
         
         st.markdown("---")
         
-        # خيارات إضافية
-        with st.expander("⚡ خيارات متقدمة"):
-            include_comments = st.checkbox("تضمين التعليقات والتفسيرات", value=True)
-            add_interpretations = st.checkbox("إضافة تفسيرات النتائج", value=True)
+        # خيارات متقدمة
+        with st.expander("⚙️ خيارات متقدمة"):
+            auto_detect = st.checkbox("التعرف التلقائي على الأنماط", value=True)
+            generate_summary = st.checkbox("توليد تقرير ملخص", value=True)
+            debug_mode = st.checkbox("وضع التصحيح", value=False)
         
-        generate_btn = st.button(
-            "🚀 توليد الحل النموذجي",
+        analyze_btn = st.button(
+            "🧠 تحليل تلقائي كامل",
             type="primary",
             use_container_width=True
         )
     
     # المنطقة الرئيسية
     st.markdown("""
-    ## 📋 نظرة عامة على الحل النموذجي
+    ## 🎯 محلل SPSS الديناميكي
     
-    هذا التطبيق يولد **حلاً نموذجياً كاملاً** لامتحانات SPSS بناءً على:
+    ### 📋 المميزات:
     
-    1. **تحليل البيانات** المرفوعة
-    2. **توليد كود SPSS** صحيح وخالٍ من الأخطاء
-    3. **إضافة تفسيرات** لكل خطوة تحليلية
-    4. **تضمين النتائج المتوقعة** وتعليقات التفسير
+    1. **ديناميكي بالكامل**: يحل أي أسئلة إحصائية مع أي بيانات
+    2. **تخمين ذكي**: يتعرف على أنواع المتغيرات ومعانيها تلقائياً
+    3. **تحليل تلقائي**: يحدد نوع التحليل المناسب لكل سؤال
+    4. **دعم كامل**: يدعم جميع أنواع التحليلات الإحصائية الشائعة
+    5. **توليد كود كامل**: يولد كود SPSS جاهز للتشغيل
     
-    ### 🎯 المميزات:
-    - ✅ حل كامل لـ 16 سؤالاً إحصائياً
-    - ✅ كود SPSS صالح 100% للتشغيل
-    - ✅ تعليقات وتفسيرات لكل مخرج
-    - ✅ تحليلات إضافية متقدمة
+    ### 📊 أنواع البيانات المدعومة:
+    - أي بيانات رقمية أو فئوية
+    - أي عدد من المتغيرات
+    - أي حجم للعينة
+    
+    ### ❓ أنواع الأسئلة المدعومة:
+    - جداول التكرارات والتوزيعات
+    - الإحصاءات الوصفية
+    - جميع أنواع الرسوم البيانية
+    - اختبارات الفرضيات
+    - تحليل الارتباط والانحدار
+    - تحليل التباين
+    - اختبارات كاي مربع
+    - والعديد غيرها...
     """)
     
-    if excel_file and generate_btn:
+    if uploaded_files and analyze_btn:
         try:
-            # تحميل البيانات
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-                tmp.write(excel_file.getvalue())
-                tmp_path = tmp.name
-            
-            df = pd.read_excel(tmp_path)
-            os.unlink(tmp_path)
-            
-            # عرض معلومات البيانات
-            st.success(f"✅ تم تحميل البيانات بنجاح: {len(df)} صف × {len(df.columns)} عمود")
-            
-            # عرض عينة من البيانات
-            with st.expander("🔍 معاينة البيانات"):
-                st.dataframe(df.head())
+            # معالجة ملف البيانات
+            if data_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                    tmp.write(data_file.getvalue())
+                    data_path = tmp.name
                 
-                # إحصائيات سريعة
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("المتغيرات", len(df.columns))
-                with col2:
-                    st.metric("الحالات", len(df))
-                with col3:
-                    complete_cases = df.notna().all(axis=1).sum()
-                    st.metric("البيانات المكتملة", f"{complete_cases}")
-            
-            # توليد الحل
-            with st.spinner("🔄 جاري توليد الحل النموذجي..."):
-                if solution_type == "📘 الحل النموذجي الأساسي":
-                    spss_code = generate_model_solution(df)
-                    solution_title = "الحل النموذجي الأساسي"
+                # قراءة البيانات
+                if data_file.name.lower().endswith('.csv'):
+                    df = pd.read_csv(data_path)
                 else:
-                    spss_code = generate_enhanced_solution(df)
-                    solution_title = "الحل المحسن المتقدم"
+                    df = pd.read_excel(data_path)
                 
-                # عرض الكود
-                st.markdown(f"---\n## 📜 {solution_title}")
+                os.unlink(data_path)
                 
-                # تنسيق العرض
-                st.code(spss_code, language='spss')
-                
-                # تحليل الكود
-                lines_count = spss_code.count('\n')
-                questions_covered = min(16, len([q for q in range(1, 17) if f"QUESTION {q}:" in spss_code]))
-                
-                st.info(f"""
-                **ملخص الحل المتولد:**
-                - 📏 عدد الأسطر: {lines_count}
-                - ❓ الأسئلة المشمولة: {questions_covered}/16
-                - ⚡ نوع الحل: {solution_type}
-                - ✅ الحالة: جاهز للتشغيل في SPSS
-                """)
-                
-                # زر التحميل
-                st.download_button(
-                    label="💾 تحميل ملف SPSS (.sps)",
-                    data=spss_code,
-                    file_name="SPSS_Model_Solution.sps",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-                
-                # عرض أمثلة من الحل
-                with st.expander("🔍 أمثلة من الحل المتولد"):
-                    # استخراج أمثلة متنوعة
-                    examples = []
-                    lines = spss_code.split('\n')
+                # معالجة ملف الأسئلة
+                questions_text = ""
+                if questions_file:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+                        tmp.write(questions_file.getvalue())
+                        questions_path = tmp.name
                     
-                    for line in lines:
-                        line_stripped = line.strip()
-                        if any(keyword in line_stripped for keyword in ['QUESTION', 'FREQUENCIES', 'GRAPH', 'EXAMINE', 'ECHO', 'RECODE']):
-                            if line_stripped and len(line_stripped) > 10:
-                                examples.append(line_stripped)
-                        if len(examples) >= 15:
-                            break
+                    if questions_file.name.lower().endswith(('.docx', '.doc')):
+                        doc = Document(questions_path)
+                        questions_text = "\n".join([para.text for para in doc.paragraphs])
+                    else:
+                        with open(questions_path, 'r', encoding='utf-8') as f:
+                            questions_text = f.read()
                     
-                    for example in examples[:10]:
-                        st.code(example, language='spss')
+                    os.unlink(questions_path)
+                else:
+                    questions_text = "No questions file provided. Using automatic question generation."
                 
-                # تعليمات التشغيل
-                with st.expander("📖 كيفية استخدام الحل في SPSS"):
-                    st.markdown("""
-                    ### خطوات تشغيل الحل في SPSS:
+                # إنشاء المحلل
+                with st.spinner("🔍 جاري تحليل البيانات والأسئلة..."):
+                    analyzer = DynamicSPSSAnalyzer(df, questions_text)
                     
-                    1. **فتح SPSS** على جهازك
-                    2. **تحميل بياناتك** أو إدخالها
-                    3. **الذهاب إلى:** File → New → Syntax
-                    4. **نسخ الكود** من الأعلى ولصقه في نافذة Syntax
-                    5. **تشغيل الكود** بأحد الطرق:
-                       - الضغط على **Ctrl+A** ثم **Ctrl+R**
-                       - النقر على **Run** → **All**
-                    6. **مراجعة النتائج** في نافذة Output
+                    st.success(f"✅ تم تحليل {len(df)} حالة و{len(df.columns)} متغير")
                     
-                    ### نصائح مهمة:
-                    - احفظ ملف Syntax للاستخدام المستقبلي
-                    - تأكد من تطابق أسماء المتغيرات مع بياناتك
-                    - اقرأ تعليقات ECHO لفهم النتائج
-                    """)
+                    # عرض المعلومات
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("المتغيرات", len(df.columns))
+                    with col2:
+                        st.metric("الحالات", len(df))
+                    with col3:
+                        st.metric("الأسئلة", len(analyzer.questions))
+                    
+                    # عرض تحليل المتغيرات
+                    with st.expander("📋 تحليل المتغيرات"):
+                        var_table = []
+                        for var_name, info in analyzer.variable_info.items():
+                            var_table.append({
+                                'المتغير': var_name,
+                                'المعنى': info.get('inferred_meaning', 'unknown'),
+                                'النوع': info['stat_type'],
+                                'المستوى': info['measurement_level'],
+                                'القيم الفريدة': info['n_unique']
+                            })
+                        st.table(pd.DataFrame(var_table))
+                    
+                    # عرض الأسئلة وتحليلها
+                    with st.expander("📝 تحليل الأسئلة"):
+                        for q in analyzer.questions[:10]:
+                            st.markdown(f"**{q['number']}. {q['text']}**")
+                            st.caption(f"النوع: {q['detected_type']} | الطريقة: {q['analysis_method']}")
+                            if q['variables']:
+                                st.caption(f"المتغيرات: {', '.join(q['variables'])}")
+                            st.markdown("---")
+                    
+                    # توليد كود SPSS
+                    st.markdown("---")
+                    st.subheader("⚙️ توليد كود SPSS الديناميكي")
+                    
+                    with st.spinner("🔄 جاري توليد الحل الكامل..."):
+                        spss_code = analyzer.generate_spss_syntax()
+                        
+                        # عرض الكود
+                        st.code(spss_code, language='spss')
+                        
+                        # تحميل الكود
+                        st.download_button(
+                            label="💾 تحميل ملف SPSS (.sps)",
+                            data=spss_code,
+                            file_name="Dynamic_SPSS_Solution.sps",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+                        
+                        # عرض عينات من التحليلات
+                        with st.expander("🔍 عينات من التحليلات المتولدة"):
+                            lines = spss_code.split('\n')
+                            analysis_samples = []
+                            
+                            for line in lines:
+                                if any(keyword in line for keyword in [
+                                    'FREQUENCIES', 'DESCRIPTIVES', 'GRAPH', 
+                                    'T-TEST', 'CORRELATIONS', 'REGRESSION',
+                                    'ONEWAY', 'CROSSTABS', 'MEANS'
+                                ]):
+                                    analysis_samples.append(line.strip())
+                                    if len(analysis_samples) >= 15:
+                                        break
+                            
+                            for sample in analysis_samples:
+                                st.code(sample, language='spss')
+            
+            else:
+                st.warning("⚠️ يرجى رفع ملف بيانات (Excel/CSV)")
         
         except Exception as e:
             st.error(f"❌ حدث خطأ: {str(e)}")
+            import traceback
+            if st.checkbox("عرض تفاصيل الخطأ للتصحيح"):
+                st.code(traceback.format_exc())
 
-# تشغيل التطبيق
 if __name__ == "__main__":
     main()
