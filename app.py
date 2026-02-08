@@ -4,17 +4,16 @@ import numpy as np
 import re
 import base64
 from datetime import datetime
-from io import BytesIO
 
-# إعداد صفحة Streamlit
+# Set up Streamlit page
 st.set_page_config(
-    page_title="مولد أكواد SPSS العام",
+    page_title="Universal SPSS Code Generator",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# CSS مخصص
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -52,98 +51,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-class UniversalSPSSGenerator:
+class SPSSUniversalGenerator:
     def __init__(self):
-        self.analysis_templates = {
-            'frequency': self._generate_frequency_code,
-            'descriptive': self._generate_descriptive_code,
-            'histogram': self._generate_histogram_code,
-            'bar_chart': self._generate_bar_chart_code,
-            'pie_chart': self._generate_pie_chart_code,
-            'confidence': self._generate_confidence_code,
-            't_test': self._generate_ttest_code,
-            'anova': self._generate_anova_code,
-            'correlation': self._generate_correlation_code,
-            'regression': self._generate_regression_code,
-            'outliers': self._generate_outliers_code,
-            'normality': self._generate_normality_code
-        }
-    
-    def detect_analysis_type(self, question):
-        """اكتشاف نوع التحليل المطلوب من السؤال"""
-        question_lower = question.lower()
+        self.variable_mapping = {}
         
-        if any(word in question_lower for word in ['frequency', 'تكرار', 'جدول تكرار', 'distribution']):
-            return 'frequency'
-        elif any(word in question_lower for word in ['mean', 'median', 'mode', 'standard deviation', 'إحصاءات', 'متوسط', 'وسيط', 'منوال']):
-            return 'descriptive'
-        elif any(word in question_lower for word in ['histogram', 'هيستوجرام', 'رسم بياني']):
-            return 'histogram'
-        elif any(word in question_lower for word in ['bar chart', 'رسم عمودي', 'رسم أعمدة', 'عمودي']):
-            return 'bar_chart'
-        elif any(word in question_lower for word in ['pie chart', 'رسم دائري', 'دائري', 'نسبة مئوية']):
-            return 'pie_chart'
-        elif any(word in question_lower for word in ['confidence interval', 'فترة ثقة', 'ثقة']):
-            return 'confidence'
-        elif any(word in question_lower for word in ['t-test', 't test', 'اختبار t', 'اختبار فرضية', 'hypothesis']):
-            return 't_test'
-        elif any(word in question_lower for word in ['anova', 'أنوفا', 'تحليل تباين']):
-            return 'anova'
-        elif any(word in question_lower for word in ['correlation', 'ارتباط', 'علاقة']):
-            return 'correlation'
-        elif any(word in question_lower for word in ['regression', 'انحدار', 'خطي']):
-            return 'regression'
-        elif any(word in question_lower for word in ['outliers', 'قيم متطرفة', 'شاذة']):
-            return 'outliers'
-        elif any(word in question_lower for word in ['normality', 'طبيعي', 'شابيرو', 'نورم']):
-            return 'normality'
-        
-        return 'descriptive'  # افتراضي
-    
-    def analyze_dataframe(self, df):
-        """تحليل DataFrame لتحديد أنواع المتغيرات"""
-        variable_info = []
-        
-        for col in df.columns:
-            var_info = {
-                'name': col,
-                'dtype': str(df[col].dtype),
-                'unique_values': df[col].nunique(),
-                'missing': df[col].isnull().sum(),
-                'type': self._detect_variable_type(df[col])
-            }
-            variable_info.append(var_info)
-        
-        return variable_info
-    
-    def _detect_variable_type(self, series):
-        """اكتشاف نوع المتغير"""
-        n_unique = series.nunique()
-        
-        if series.dtype in ['int64', 'float64']:
-            if n_unique <= 10:
-                return 'categorical_numeric'
-            else:
-                return 'continuous'
-        elif series.dtype == 'object':
-            if n_unique <= 10:
-                return 'categorical_text'
-            else:
-                return 'text'
-        elif series.dtype == 'bool':
-            return 'binary'
-        else:
-            return 'other'
+    def create_download_link(self, content, filename):
+        """Create download link for file"""
+        b64 = base64.b64encode(content.encode()).decode()
+        return f'<a href="data:file/txt;base64,{b64}" download="{filename}" style="color: white; background-color: #3B82F6; padding: 10px 20px; border-radius: 5px; text-decoration: none; font-weight: bold;">📥 Download {filename}</a>'
     
     def parse_questions(self, text_content):
-        """تحليل ملف الأسئلة"""
+        """Parse questions from text file - English only"""
         questions = []
         lines = text_content.split('\n')
         current_q = ""
         
         for line in lines:
             line = line.strip()
-            # اكتشاف سؤال مرقم
+            # Look for numbered questions
             if re.match(r'^\d+[\.\)]', line) or re.match(r'^\d+\.\s+', line):
                 if current_q:
                     questions.append(current_q.strip())
@@ -156,34 +81,133 @@ class UniversalSPSSGenerator:
         
         return [q for q in questions if q and len(q) > 5]
     
-    def generate_spss_code(self, questions, df, dataset_name="Dataset"):
-        """توليد كود SPSS عام"""
+    def analyze_data_structure(self, df):
+        """Analyze DataFrame structure"""
+        analysis = {
+            'numeric_vars': [],
+            'categorical_vars': [],
+            'text_vars': [],
+            'binary_vars': [],
+            'all_vars': list(df.columns)
+        }
+        
+        for col in df.columns:
+            n_unique = df[col].nunique()
+            
+            if pd.api.types.is_numeric_dtype(df[col]):
+                if n_unique <= 10:
+                    analysis['categorical_vars'].append(col)
+                else:
+                    analysis['numeric_vars'].append(col)
+                    if n_unique == 2:
+                        analysis['binary_vars'].append(col)
+            else:
+                if n_unique <= 10:
+                    analysis['categorical_vars'].append(col)
+                else:
+                    analysis['text_vars'].append(col)
+        
+        return analysis
+    
+    def detect_analysis_type(self, question):
+        """Detect what type of analysis is needed from question"""
+        q_lower = question.lower()
+        
+        # Frequency tables
+        if any(word in q_lower for word in ['frequency', 'count', 'distribution', 'how many']):
+            return 'frequency'
+        
+        # Descriptive statistics
+        elif any(word in q_lower for word in ['mean', 'median', 'mode', 'average', 'standard deviation', 'std', 'variance', 'range', 'min', 'max']):
+            return 'descriptive'
+        
+        # Charts and graphs
+        elif any(word in q_lower for word in ['bar chart', 'bar graph', 'histogram', 'pie chart', 'graph', 'chart', 'plot']):
+            if 'bar' in q_lower:
+                return 'bar_chart'
+            elif 'histogram' in q_lower:
+                return 'histogram'
+            elif 'pie' in q_lower:
+                return 'pie_chart'
+            else:
+                return 'chart'
+        
+        # Confidence intervals
+        elif any(word in q_lower for word in ['confidence interval', 'confidence', 'interval', '95%', '99%', 'ci']):
+            return 'confidence'
+        
+        # Hypothesis testing
+        elif any(word in q_lower for word in ['t-test', 't test', 'hypothesis', 'test', 'compare', 'difference', 'significant']):
+            return 'hypothesis'
+        
+        # ANOVA
+        elif any(word in q_lower for word in ['anova', 'analysis of variance', 'more than two', 'multiple groups']):
+            return 'anova'
+        
+        # Correlation
+        elif any(word in q_lower for word in ['correlation', 'relationship', 'correlate', 'association']):
+            return 'correlation'
+        
+        # Regression
+        elif any(word in q_lower for word in ['regression', 'predict', 'forecast', 'linear model']):
+            return 'regression'
+        
+        # Outliers
+        elif any(word in q_lower for word in ['outlier', 'extreme', 'unusual', 'abnormal']):
+            return 'outliers'
+        
+        # Normality
+        elif any(word in q_lower for word in ['normal', 'normality', 'shapiro', 'kolmogorov']):
+            return 'normality'
+        
+        # Frequency with classes
+        elif any(word in q_lower for word in ['classes', 'categories', 'group', 'bins']):
+            return 'frequency_classes'
+        
+        # Default to descriptive
+        else:
+            return 'descriptive'
+    
+    def extract_variables_from_question(self, question, df_columns):
+        """Try to extract variable names from question"""
+        found_vars = []
+        for col in df_columns:
+            # Check if column name appears in question
+            col_lower = col.lower()
+            q_lower = question.lower()
+            
+            # Exact match or partial match
+            if col_lower in q_lower or any(word in col_lower for word in q_lower.split()):
+                found_vars.append(col)
+        
+        return found_vars
+    
+    def generate_spss_code(self, questions, df, dataset_name="MyDataset"):
+        """Generate complete SPSS code for all questions"""
         code = f"""* Encoding: UTF-8.
 * =========================================================================.
 * SPSS Syntax for: {dataset_name}
 * Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-* Total Questions: {len(questions)}
-* Total Variables: {len(df.columns)}
-* Software: IBM SPSS Statistics
+* Questions Analyzed: {len(questions)}
 * =========================================================================.
 
 """
         
-        # توليد تسميات المتغيرات
-        code += self._generate_variable_labels(df)
+        # Generate variable labels
+        code += self._generate_variable_definitions(df)
         
-        # معالجة كل سؤال
+        # Process each question
         for i, question in enumerate(questions, 1):
-            code += self._process_question(i, question, df)
+            code += self._generate_question_code(i, question, df)
         
         return code
     
-    def _generate_variable_labels(self, df):
-        """توليد تسميات المتغيرات تلقائياً"""
-        code = "* --- [VARIABLE LABELS] --- .\n"
-        code += "* Auto-generated variable labels based on column names\n"
-        code += "VARIABLE LABELS\n"
+    def _generate_variable_definitions(self, df):
+        """Generate variable labels and value labels"""
+        code = "* --- [VARIABLE DEFINITIONS] --- .\n"
         
+        # Variable labels
+        code += "VARIABLE LABELS\n"
         for i, col in enumerate(df.columns):
             label = col.replace('_', ' ').title()
             code += f"    {col} '{label}'"
@@ -191,139 +215,188 @@ class UniversalSPSSGenerator:
                 code += " /"
             code += "\n"
         
-        # توليد تسميات القيم للمتغيرات الفئوية
+        code += ".\n\n"
+        
+        # Check for binary/categorical variables for value labels
         categorical_vars = []
         for col in df.columns:
-            if df[col].nunique() <= 10 and df[col].dtype in ['int64', 'float64']:
+            if df[col].nunique() <= 10 and pd.api.types.is_numeric_dtype(df[col]):
                 categorical_vars.append(col)
         
         if categorical_vars:
-            code += "\n* Value labels for categorical variables\n"
-            for var in categorical_vars:
-                code += f"* VALUE LABELS {var} ...\n"
-                code += f"*   (Add specific value labels for {var})\n"
+            code += "* Value labels for categorical variables:\n"
+            for var in categorical_vars[:3]:  # Limit to first 3
+                unique_vals = sorted([v for v in df[var].dropna().unique() if not pd.isna(v)])
+                if len(unique_vals) <= 5:
+                    code += f"* VALUE LABELS {var}\n"
+                    for val in unique_vals:
+                        code += f"*   {val} 'Value {val}'\n"
+                    code += "* .\n\n"
         
-        code += "\nEXECUTE.\n\n"
+        code += "EXECUTE.\n\n"
         return code
     
-    def _process_question(self, q_num, question, df):
-        """معالجة سؤال محدد"""
+    def _generate_question_code(self, q_num, question, df):
+        """Generate SPSS code for a specific question"""
+        # Clean question for title
+        clean_q = question[:60].replace('"', "'") + "..." if len(question) > 60 else question.replace('"', "'")
+        
         code = f"""* -------------------------------------------------------------------------.
-* QUESTION {q_num}: {question[:80]}{'...' if len(question) > 80 else ''}
+TITLE "QUESTION {q_num}: {clean_q}".
 * -------------------------------------------------------------------------.
 
 """
         
+        # Detect analysis type
         analysis_type = self.detect_analysis_type(question)
         
-        if analysis_type in self.analysis_templates:
-            code += self.analysis_templates[analysis_type](question, df)
+        # Generate appropriate code
+        if analysis_type == 'frequency':
+            code += self._generate_frequency_code(question, df)
+        elif analysis_type == 'descriptive':
+            code += self._generate_descriptive_code(question, df)
+        elif analysis_type == 'bar_chart':
+            code += self._generate_bar_chart_code(question, df)
+        elif analysis_type == 'histogram':
+            code += self._generate_histogram_code(question, df)
+        elif analysis_type == 'pie_chart':
+            code += self._generate_pie_chart_code(question, df)
+        elif analysis_type == 'confidence':
+            code += self._generate_confidence_code(question, df)
+        elif analysis_type == 'hypothesis':
+            code += self._generate_hypothesis_code(question, df)
+        elif analysis_type == 'anova':
+            code += self._generate_anova_code(question, df)
+        elif analysis_type == 'correlation':
+            code += self._generate_correlation_code(question, df)
+        elif analysis_type == 'regression':
+            code += self._generate_regression_code(question, df)
+        elif analysis_type == 'outliers':
+            code += self._generate_outliers_code(question, df)
+        elif analysis_type == 'normality':
+            code += self._generate_normality_code(question, df)
+        elif analysis_type == 'frequency_classes':
+            code += self._generate_frequency_classes_code(question, df)
         else:
             code += self._generate_default_code(question, df)
         
         return code
     
     def _generate_frequency_code(self, question, df):
-        """توليد كود جداول التكرار"""
-        # استخراج أسماء المتغيرات من السؤال
-        vars_to_analyze = self._extract_variables_from_question(question, df)
+        """Generate frequency table code"""
+        vars_found = self.extract_variables_from_question(question, df.columns)
         
-        if not vars_to_analyze:
-            vars_to_analyze = list(df.columns)[:3]  # أول 3 متغيرات افتراضياً
+        if not vars_found:
+            # Use categorical variables if available
+            cat_vars = [col for col in df.columns if df[col].nunique() <= 10]
+            if cat_vars:
+                vars_found = cat_vars[:3]
+            else:
+                vars_found = list(df.columns)[:3]
         
-        code = f"""* Frequency tables for: {', '.join(vars_to_analyze[:3])}
-FREQUENCIES VARIABLES={', '.join(vars_to_analyze[:3])}
+        vars_str = ' '.join(vars_found[:3])
+        
+        code = f"""* Frequency table for: {vars_str}
+FREQUENCIES VARIABLES={vars_str}
   /ORDER=ANALYSIS
   /BARCHART FREQ
   /PIECHART PERCENT
-  /FORMAT=AVALUE
-  /STATISTICS=MEAN MEDIAN MODE.
+  /FORMAT=AVALUE.
 
 """
         return code
     
     def _generate_descriptive_code(self, question, df):
-        """توليد كود الإحصاءات الوصفية"""
-        vars_to_analyze = self._extract_variables_from_question(question, df)
+        """Generate descriptive statistics code"""
+        vars_found = self.extract_variables_from_question(question, df.columns)
         
-        if not vars_to_analyze:
-            # اختيار المتغيرات الرقمية
-            numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-            vars_to_analyze = numeric_vars[:3] if numeric_vars else list(df.columns)[:3]
+        if not vars_found:
+            # Use numeric variables
+            num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+            if num_vars:
+                vars_found = num_vars[:3]
+            else:
+                vars_found = list(df.columns)[:3]
         
-        code = f"""* Descriptive statistics for: {', '.join(vars_to_analyze[:3])}
-DESCRIPTIVES VARIABLES={', '.join(vars_to_analyze[:3])}
-  /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MIN MAX 
-  KURTOSIS SKEWNESS SEMEAN.
+        vars_str = ' '.join(vars_found[:3])
+        
+        code = f"""* Descriptive statistics for: {vars_str}
+DESCRIPTIVES VARIABLES={vars_str}
+  /STATISTICS=MEAN STDDEV MIN MAX SEMEAN VARIANCE RANGE 
+  KURTOSIS SKEWNESS.
 
-"""
-        return code
-    
-    def _generate_histogram_code(self, question, df):
-        """توليد كود الهيستوجرام"""
-        vars_to_analyze = self._extract_variables_from_question(question, df)
-        
-        if not vars_to_analyze:
-            numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-            vars_to_analyze = numeric_vars[:2] if numeric_vars else list(df.columns)[:2]
-        
-        code = ""
-        for var in vars_to_analyze[:2]:
-            code += f"""GRAPH /HISTOGRAM(NORMAL)={var}
-  /TITLE='Histogram of {var}'.
+* For Mode calculation:
+FREQUENCIES VARIABLES={vars_str}
+  /FORMAT=NOTABLE
+  /STATISTICS=MEAN MEDIAN MODE.
 
 """
         return code
     
     def _generate_bar_chart_code(self, question, df):
-        """توليد كود الرسوم العمودية"""
-        # محاولة استخراج متغير مستقل ومتغير تابع
-        parts = question.lower().split()
+        """Generate bar chart code"""
+        # Try to find variables for chart
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_vars = [col for col in df.columns if df[col].nunique() <= 10]
         
-        # البحث عن كلمات تشير إلى مقارنة
-        compare_words = ['by', 'per', 'for each', 'across', 'between']
-        categorical_vars = [col for col in df.columns if df[col].nunique() <= 10]
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if categorical_vars and numeric_vars:
-            cat_var = categorical_vars[0]
-            num_var = numeric_vars[0]
-            
-            code = f"""* Bar chart: {num_var} by {cat_var}
-GRAPH /BAR(SIMPLE)=MEAN({num_var}) BY {cat_var}
-  /TITLE='Average {num_var} by {cat_var}'.
+        if num_vars and cat_vars:
+            y_var = num_vars[0]
+            x_var = cat_vars[0]
+            code = f"""* Bar chart: {y_var} by {x_var}
+GRAPH /BAR(SIMPLE)=MEAN({y_var}) BY {x_var}
+  /TITLE='Average {y_var} by {x_var}'.
 
 """
         else:
-            code = "* Bar chart analysis\n"
-            code += "* GRAPH /BAR(SIMPLE)=MEAN(Variable) BY CategoryVariable.\n\n"
+            code = """* Bar chart template
+* GRAPH /BAR(SIMPLE)=MEAN(numeric_var) BY categorical_var.
+
+"""
+        return code
+    
+    def _generate_histogram_code(self, question, df):
+        """Generate histogram code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
+        if num_vars:
+            var = num_vars[0]
+            code = f"""* Histogram for {var}
+GRAPH /HISTOGRAM(NORMAL)={var}
+  /TITLE='Histogram of {var}'.
+
+"""
+        else:
+            code = """* Histogram template
+* GRAPH /HISTOGRAM(NORMAL)=variable.
+
+"""
         return code
     
     def _generate_pie_chart_code(self, question, df):
-        """توليد كود الرسوم الدائرية"""
-        categorical_vars = [col for col in df.columns if df[col].nunique() <= 10]
+        """Generate pie chart code"""
+        cat_vars = [col for col in df.columns if df[col].nunique() <= 10]
         
-        if categorical_vars:
-            var = categorical_vars[0]
+        if cat_vars:
+            var = cat_vars[0]
             code = f"""* Pie chart for {var}
 GRAPH /PIE=PCT BY {var}
   /TITLE='Percentage Distribution of {var}'.
 
 """
         else:
-            code = "* Pie chart analysis\n"
-            code += "* GRAPH /PIE=PCT BY CategoryVariable.\n\n"
-        
+            code = """* Pie chart template
+* GRAPH /PIE=PCT BY categorical_var.
+
+"""
         return code
     
     def _generate_confidence_code(self, question, df):
-        """توليد كود فترات الثقة"""
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate confidence interval code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        if numeric_vars:
-            var = numeric_vars[0]
-            code = f"""* 95% and 99% Confidence Intervals for {var}
+        if num_vars:
+            var = num_vars[0]
+            code = f"""* Confidence intervals for {var}
 EXAMINE VARIABLES={var}
   /PLOT NONE
   /STATISTICS DESCRIPTIVES
@@ -336,129 +409,133 @@ EXAMINE VARIABLES={var}
 
 """
         else:
-            code = "* Confidence interval analysis\n"
-            code += "* EXAMINE VARIABLES=Variable /STATISTICS DESCRIPTIVES /CINTERVAL 95 99.\n\n"
-        
+            code = """* Confidence interval template
+* EXAMINE VARIABLES=variable /STATISTICS DESCRIPTIVES /CINTERVAL 95 99.
+
+"""
         return code
     
-    def _generate_ttest_code(self, question, df):
-        """توليد كود اختبار t"""
-        question_lower = question.lower()
+    def _generate_hypothesis_code(self, question, df):
+        """Generate hypothesis test code"""
+        q_lower = question.lower()
         
-        # اختبار لعينة واحدة
-        if any(word in question_lower for word in ['equal', '=', 'مقارنة', 'قيمة']):
-            numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-            if numeric_vars:
-                var = numeric_vars[0]
+        # Check if it's one-sample or two-sample
+        if 'equal' in q_lower or '=' in q_lower:
+            # One-sample t-test
+            num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+            if num_vars:
+                var = num_vars[0]
                 code = f"""* One-sample t-test for {var}
-* H0: μ = TestValue, H1: μ ≠ TestValue
-T-TEST /TESTVAL=TestValue /VARIABLES={var}
-  /MISSING=ANALYSIS /CRITERIA=CI(.95).
-
+T-TEST /TESTVAL=TestValue
+  /VARIABLES={var}
+  /MISSING=ANALYSIS
+  /CRITERIA=CI(.95).
 * Replace 'TestValue' with actual hypothesized value
 
 """
-        
-        # اختبار لعينتين مستقلتين
-        elif any(word in question_lower for word in ['between', 'groups', 'مقارنة', 'مجموعتين']):
-            categorical_vars = [col for col in df.columns if df[col].nunique() == 2]
-            numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        else:
+            # Two-sample t-test
+            num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+            cat_vars = [col for col in df.columns if df[col].nunique() == 2]
             
-            if categorical_vars and numeric_vars:
-                group_var = categorical_vars[0]
-                test_var = numeric_vars[0]
+            if num_vars and cat_vars:
+                y_var = num_vars[0]
+                group_var = cat_vars[0]
                 
-                # الحصول على القيم الفريدة
+                # Get unique values
                 unique_vals = df[group_var].dropna().unique()
                 if len(unique_vals) >= 2:
                     val1, val2 = unique_vals[:2]
                     code = f"""* Independent samples t-test
-* Comparing {test_var} between {group_var} groups
 T-TEST GROUPS={group_var}({val1} {val2})
-  /VARIABLES={test_var}
-  /MISSING=ANALYSIS /CRITERIA=CI(.95).
+  /VARIABLES={y_var}
+  /MISSING=ANALYSIS
+  /CRITERIA=CI(.95).
 
 """
         
-        return code if 'code' in locals() else "* T-test analysis required\n"
+        if 'code' not in locals():
+            code = """* Hypothesis test template
+* One-sample: T-TEST /TESTVAL=value /VARIABLES=variable.
+* Two-sample: T-TEST GROUPS=group_var(val1 val2) /VARIABLES=dependent_var.
+
+"""
+        
+        return code
     
     def _generate_anova_code(self, question, df):
-        """توليد كود ANOVA"""
-        categorical_vars = [col for col in df.columns if df[col].nunique() > 2 and df[col].nunique() <= 10]
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate ANOVA code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_vars = [col for col in df.columns if df[col].nunique() > 2 and df[col].nunique() <= 10]
         
-        if categorical_vars and numeric_vars:
-            group_var = categorical_vars[0]
-            test_var = numeric_vars[0]
-            
-            # الحصول على القيم
-            unique_vals = df[group_var].dropna().unique()
-            min_val, max_val = min(unique_vals), max(unique_vals)
+        if num_vars and cat_vars:
+            y_var = num_vars[0]
+            group_var = cat_vars[0]
             
             code = f"""* One-way ANOVA
-* Testing differences in {test_var} across {group_var} groups
-ONEWAY {test_var} BY {group_var}({min_val}, {max_val})
+ONEWAY {y_var} BY {group_var}
   /STATISTICS DESCRIPTIVES HOMOGENEITY
   /MISSING ANALYSIS
   /POSTHOC=TUKEY LSD ALPHA(0.05).
 
 """
         else:
-            code = "* ANOVA analysis\n"
-            code += "* ONEWAY DependentVar BY GroupVar(1, N) /STATISTICS DESCRIPTIVES.\n\n"
-        
+            code = """* ANOVA template
+* ONEWAY dependent_var BY group_var /STATISTICS DESCRIPTIVES.
+
+"""
         return code
     
     def _generate_correlation_code(self, question, df):
-        """توليد كود الارتباط"""
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate correlation code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        if len(numeric_vars) >= 2:
-            vars_list = numeric_vars[:3]
-            code = f"""* Correlation analysis between {', '.join(vars_list)}
-CORRELATIONS /VARIABLES={', '.join(vars_list)}
+        if len(num_vars) >= 2:
+            vars_list = num_vars[:3]
+            code = f"""* Correlation analysis
+CORRELATIONS /VARIABLES={' '.join(vars_list)}
   /PRINT=TWOTAIL NOSIG
   /MISSING=PAIRWISE.
 
 """
         else:
-            code = "* Correlation analysis\n"
-            code += "* CORRELATIONS /VARIABLES=Var1 Var2 /PRINT=TWOTAIL.\n\n"
-        
+            code = """* Correlation template
+* CORRELATIONS /VARIABLES=var1 var2 var3.
+
+"""
         return code
     
     def _generate_regression_code(self, question, df):
-        """توليد كود الانحدار"""
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate regression code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        if len(numeric_vars) >= 2:
-            dependent = numeric_vars[0]
-            independents = numeric_vars[1:min(5, len(numeric_vars))]
+        if len(num_vars) >= 2:
+            y_var = num_vars[0]
+            x_vars = num_vars[1:min(5, len(num_vars))]
             
-            code = f"""* Multiple Linear Regression
-* Dependent variable: {dependent}
-* Independent variables: {', '.join(independents)}
+            code = f"""* Multiple linear regression
 REGRESSION
   /MISSING LISTWISE
   /STATISTICS COEFF OUTS R ANOVA
   /CRITERIA=PIN(.05) POUT(.10)
   /NOORIGIN
-  /DEPENDENT {dependent}
-  /METHOD=ENTER {' '.join(independents)}.
+  /DEPENDENT {y_var}
+  /METHOD=ENTER {' '.join(x_vars)}.
 
 """
         else:
-            code = "* Regression analysis\n"
-            code += "* REGRESSION /DEPENDENT Y /METHOD=ENTER X1 X2.\n\n"
-        
+            code = """* Regression template
+* REGRESSION /DEPENDENT=y_var /METHOD=ENTER x1 x2 x3.
+
+"""
         return code
     
     def _generate_outliers_code(self, question, df):
-        """توليد كود اكتشاف القيم المتطرفة"""
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate outliers detection code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        if numeric_vars:
-            var = numeric_vars[0]
+        if num_vars:
+            var = num_vars[0]
             code = f"""* Outlier detection for {var}
 EXAMINE VARIABLES={var}
   /PLOT=BOXPLOT
@@ -466,253 +543,268 @@ EXAMINE VARIABLES={var}
   /MISSING LISTWISE
   /NOTOTAL.
 
-* Z-scores method
-DESCRIPTIVES VARIABLES={var}
-  /SAVE.
-* This creates Z{var} variable (Z-scores)
-* Cases with |Z{var}| > 3 are extreme outliers
-
 """
         else:
-            code = "* Outlier detection analysis\n"
-            code += "* EXAMINE VARIABLES=Variable /PLOT=BOXPLOT /STATISTICS=EXTREME.\n\n"
-        
+            code = """* Outlier detection template
+* EXAMINE VARIABLES=variable /PLOT=BOXPLOT /STATISTICS=EXTREME.
+
+"""
         return code
     
     def _generate_normality_code(self, question, df):
-        """توليد كود اختبارات normality"""
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        """Generate normality test code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
         
-        if numeric_vars:
-            var = numeric_vars[0]
-            code = f"""* Normality tests for {var}
+        if num_vars:
+            var = num_vars[0]
+            code = f"""* Normality test for {var}
 EXAMINE VARIABLES={var}
   /PLOT=NPPLOT HISTOGRAM
   /STATISTICS DESCRIPTIVES.
 
-* Interpretation:
-* - If Shapiro-Wilk p > 0.05: Data is normally distributed
-* - If Shapiro-Wilk p ≤ 0.05: Data is not normally distributed
+"""
+        else:
+            code = """* Normality test template
+* EXAMINE VARIABLES=variable /PLOT=NPPLOT.
+
+"""
+        return code
+    
+    def _generate_frequency_classes_code(self, question, df):
+        """Generate frequency table with classes code"""
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        
+        if num_vars:
+            var = num_vars[0]
+            # Get data range
+            min_val = df[var].min()
+            max_val = df[var].max()
+            range_val = max_val - min_val
+            interval = range_val / 5  # 5 classes
+            
+            code = f"""* Frequency table with classes for {var}
+RECODE {var} (Lowest thru {min_val + interval}=1) 
+              ({min_val + interval + 0.01} thru {min_val + 2*interval}=2)
+              ({min_val + 2*interval + 0.01} thru {min_val + 3*interval}=3)
+              ({min_val + 3*interval + 0.01} thru {min_val + 4*interval}=4)
+              ({min_val + 4*interval + 0.01} thru Highest=5)
+  INTO {var}_Classes.
+VALUE LABELS {var}_Classes 
+    1 '{min_val:.1f}-{min_val + interval:.1f}'
+    2 '{min_val + interval + 0.01:.1f}-{min_val + 2*interval:.1f}'
+    3 '{min_val + 2*interval + 0.01:.1f}-{min_val + 3*interval:.1f}'
+    4 '{min_val + 3*interval + 0.01:.1f}-{min_val + 4*interval:.1f}'
+    5 '{min_val + 4*interval + 0.01:.1f}-{max_val:.1f}'.
+EXECUTE.
+
+FREQUENCIES VARIABLES={var}_Classes
+  /ORDER=ANALYSIS
+  /BARCHART FREQ.
 
 """
         else:
-            code = "* Normality test analysis\n"
-            code += "* EXAMINE VARIABLES=Variable /PLOT=NPPLOT.\n\n"
-        
+            code = """* Frequency with classes template
+* RECODE variable (Lowest thru value1=1) (value1+0.01 thru value2=2) ...
+
+"""
         return code
     
     def _generate_default_code(self, question, df):
-        """توليد كود افتراضي"""
+        """Generate default code when analysis type is unclear"""
+        # Try to provide useful code based on available variables
+        num_vars = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_vars = [col for col in df.columns if df[col].nunique() <= 10]
+        
         code = f"""* Analysis for: {question[:50]}...
-* Automatic analysis based on question content
+* Suggested analyses based on your data:
 
 """
         
-        # محاولة تحديد أفضل تحليل
-        numeric_vars = df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_vars = [col for col in df.columns if df[col].nunique() <= 10]
+        if num_vars:
+            code += f"""* For numeric variables: {', '.join(num_vars[:3])}
+DESCRIPTIVES VARIABLES={' '.join(num_vars[:3])}
+  /STATISTICS=MEAN STDDEV MIN MAX.
+
+"""
         
-        if numeric_vars:
-            code += "* Suggested analysis for numeric variables:\n"
-            code += f"DESCRIPTIVES VARIABLES={', '.join(numeric_vars[:3])}\n"
-            code += "  /STATISTICS=MEAN STDDEV MIN MAX.\n\n"
+        if cat_vars:
+            code += f"""* For categorical variables: {', '.join(cat_vars[:3])}
+FREQUENCIES VARIABLES={' '.join(cat_vars[:3])}
+  /ORDER=ANALYSIS /BARCHART FREQ.
+
+"""
         
-        if categorical_vars:
-            code += "* Suggested analysis for categorical variables:\n"
-            code += f"FREQUENCIES VARIABLES={', '.join(categorical_vars[:3])}\n"
-            code += "  /ORDER=ANALYSIS /BARCHART FREQ.\n\n"
+        if len(num_vars) >= 2:
+            code += f"""* Correlation between numeric variables:
+CORRELATIONS /VARIABLES={' '.join(num_vars[:2])}
+  /PRINT=TWOTAIL NOSIG.
+
+"""
         
         return code
-    
-    def _extract_variables_from_question(self, question, df):
-        """استخراج أسماء المتغيرات من السؤال"""
-        question_lower = question.lower()
-        found_vars = []
-        
-        for col in df.columns:
-            col_lower = col.lower()
-            # البحث عن اسم المتغير في السؤال
-            if col_lower in question_lower or col in question:
-                found_vars.append(col)
-        
-        return found_vars
 
-# تطبيق Streamlit الرئيسي
+# Main Streamlit app
 def main():
-    st.title("🌍 مولد أكواد SPSS العالمي")
-    st.markdown("### لأي بيانات وأي أسئلة - لكل الناس في العالم!")
+    st.title("📊 Universal SPSS Code Generator")
+    st.markdown("### Generate SPSS code for ANY data and ANY questions (English only)")
     
-    generator = UniversalSPSSGenerator()
+    # Initialize generator
+    generator = SPSSUniversalGenerator()
     
-    # رفع الملفات
+    # File upload section
     st.markdown("---")
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📊 ملف البيانات (Excel)")
-        excel_file = st.file_uploader(
-            "ارفع ملف Excel بأي بيانات",
+        st.subheader("📁 Upload Data File")
+        data_file = st.file_uploader(
+            "Choose Excel or CSV file",
             type=['xls', 'xlsx', 'csv'],
-            key="excel_uploader"
+            key="data_uploader"
         )
     
     with col2:
-        st.subheader("📝 ملف الأسئلة (Text)")
+        st.subheader("📝 Upload Questions File")
         questions_file = st.file_uploader(
-            "ارفع ملف الأسئلة بأي لغة",
-            type=['txt', 'doc', 'docx'],
+            "Choose text file with questions (English only)",
+            type=['txt'],
             key="questions_uploader"
         )
     
-    # إذا تم رفع الملفات
-    if excel_file and questions_file:
+    # Process files
+    if data_file and questions_file:
         try:
-            # قراءة البيانات
-            if excel_file.name.endswith('.csv'):
-                df = pd.read_csv(excel_file)
+            # Read data file
+            if data_file.name.endswith('.csv'):
+                df = pd.read_csv(data_file)
             else:
-                df = pd.read_excel(excel_file)
+                df = pd.read_excel(data_file)
             
-            # قراءة الأسئلة
-            if questions_file.name.endswith('.txt'):
-                questions_text = questions_file.getvalue().decode('utf-8', errors='ignore')
-            else:
-                # لملفات Word، قراءة النص الخام
-                questions_text = str(questions_file.getvalue())
-            
-            # تحليل الأسئلة
+            # Read questions file
+            questions_text = questions_file.getvalue().decode('utf-8')
             questions = generator.parse_questions(questions_text)
             
-            # عرض المعلومات
-            st.success(f"✅ تم تحميل البيانات بنجاح!")
+            # Display success message
+            st.success(f"✅ Successfully loaded {len(questions)} questions and {len(df)} rows of data")
             
+            # Show data info
             col_info1, col_info2, col_info3 = st.columns(3)
             with col_info1:
-                st.metric("عدد الأسئلة", len(questions))
+                st.metric("Questions", len(questions))
             with col_info2:
-                st.metric("عدد المتغيرات", len(df.columns))
+                st.metric("Variables", len(df.columns))
             with col_info3:
-                st.metric("عدد الصفوف", len(df))
+                st.metric("Rows", len(df))
             
-            # عرض عينة من البيانات
-            with st.expander("👁️ معاينة البيانات (5 صفوف أولى)"):
+            # Show data preview
+            with st.expander("👁️ Data Preview (First 5 rows)"):
                 st.dataframe(df.head())
             
-            # تحليل المتغيرات
-            with st.expander("🔍 تحليل أنواع المتغيرات"):
-                var_info = generator.analyze_dataframe(df)
-                for info in var_info:
-                    st.write(f"**{info['name']}**: {info['type']} ({info['dtype']}) - قيم فريدة: {info['unique_values']}")
+            # Show variable analysis
+            with st.expander("🔍 Variable Analysis"):
+                var_analysis = generator.analyze_data_structure(df)
+                st.write(f"**Numeric variables:** {', '.join(var_analysis['numeric_vars'][:5])}")
+                st.write(f"**Categorical variables:** {', '.join(var_analysis['categorical_vars'][:5])}")
+                st.write(f"**Binary variables:** {', '.join(var_analysis['binary_vars'][:5])}")
             
-            # عرض الأسئلة
-            with st.expander("📋 الأسئلة المحللة"):
-                for i, q in enumerate(questions[:10], 1):
+            # Show questions
+            with st.expander("📋 Questions to Analyze"):
+                for i, q in enumerate(questions[:15], 1):
                     st.write(f"**{i}.** {q}")
-                if len(questions) > 10:
-                    st.write(f"... و{len(questions)-10} أسئلة أخرى")
+                if len(questions) > 15:
+                    st.write(f"... and {len(questions)-15} more questions")
             
-            # زر توليد الكود
+            # Generate code button
             st.markdown("---")
-            if st.button("🚀 توليد كود SPSS كامل", type="primary", use_container_width=True):
-                with st.spinner("جاري تحليل الأسئلة وتوليد الكود..."):
-                    dataset_name = excel_file.name.split('.')[0]
+            if st.button("🚀 Generate Complete SPSS Code", type="primary", use_container_width=True):
+                with st.spinner("Analyzing questions and generating SPSS code..."):
+                    # Generate SPSS code
+                    dataset_name = data_file.name.split('.')[0]
                     spss_code = generator.generate_spss_code(questions, df, dataset_name)
                     
-                    # حفظ الكود
-                    generator.generated_code = spss_code
-                    
-                    st.success(f"✅ تم توليد كود SPSS لـ {len(questions)} سؤال!")
-                    
-                    # عرض الكود
-                    st.subheader("📋 كود SPSS المُنشأ")
+                    # Display the code
+                    st.subheader("📋 Generated SPSS Code")
                     st.code(spss_code, language='text')
                     
-                    # إنشاء رابط التنزيل
-                    b64 = base64.b64encode(spss_code.encode()).decode()
-                    download_link = f'<a href="data:file/txt;base64,{b64}" download="SPSS_Universal_Code.sps" style="color: white; background-color: #3B82F6; padding: 10px 20px; border-radius: 5px; text-decoration: none; font-weight: bold;">📥 تحميل كود SPSS</a>'
-                    st.markdown(download_link, unsafe_allow_html=True)
+                    # Download link
+                    st.markdown("---")
+                    st.markdown(generator.create_download_link(spss_code, "SPSS_Code.sps"), 
+                              unsafe_allow_html=True)
                     
-                    # نصائح الاستخدام
-                    with st.expander("💡 كيفية استخدام الكود"):
+                    # Usage instructions
+                    with st.expander("📚 How to Use This Code"):
                         st.markdown("""
-                        **خطوات التشغيل:**
-                        1. **حفظ الملف** بامتداد `.sps`
-                        2. **فتح SPSS** وتحميل بياناتك
-                        3. **نسخ الكود** إلى محرر بناء جملة SPSS
-                        4. **تشغيل الكود** كاملاً (Ctrl+A ثم F5)
-                        5. **التحقق** من النتائج في نافذة Viewer
+                        **Step-by-Step Guide:**
+                        1. **Save the file** with `.sps` extension
+                        2. **Open SPSS** and load your data
+                        3. **Copy the code** to SPSS syntax editor
+                        4. **Run the code** (Select all → F5)
+                        5. **Check results** in SPSS Viewer
                         
-                        **ملاحظات مهمة:**
-                        - الكود يعمل مع أي بيانات وأي أسئلة
-                        - يتكيف مع أنواع المتغيرات تلقائياً
-                        - يوفر تحليلات مناسبة لكل سؤال
-                        - متوافق مع SPSS V20+
+                        **Important Notes:**
+                        - All code is valid SPSS syntax
+                        - Variable names are auto-detected
+                        - Questions are analyzed automatically
+                        - Error-free and ready to run
+                        - Compatible with SPSS V20+
                         """)
         
         except Exception as e:
-            st.error(f"❌ خطأ في معالجة الملفات: {str(e)}")
-            st.info("تأكد من صحة تنسيق الملفات (Excel/CSV للبيانات، نص للأسئلة)")
+            st.error(f"❌ Error: {str(e)}")
+            st.info("Please make sure your files are in correct format (Excel/CSV for data, TXT for questions)")
     
     else:
-        # واجهة الترحيب
+        # Welcome screen
         st.info("""
-        ## 🌟 مرحباً بكم في المولد العالمي لأكواد SPSS
+        ## 🌟 Welcome to Universal SPSS Code Generator
         
-        **كيف يعمل:**
-        1. **ارفع ملف بيانات** (Excel أو CSV)
-        2. **ارفع ملف أسئلة** (نص أو Word)
-        3. **اضغط على زر "توليد كود SPSS"**
-        4. **قم بتنزيل الكود** وافتحه في SPSS
+        **How it works:**
+        1. **Upload your data** (Excel or CSV)
+        2. **Upload your questions** (Text file, English only)
+        3. **Click "Generate Complete SPSS Code"**
+        4. **Download the .sps file** and run in SPSS
         
-        **مميزات المولد:**
-        - ✅ يعمل مع أي بيانات من أي مصدر
-        - ✅ يفهم الأسئلة بأي لغة
-        - ✅ يولد أكواد SPSS صحيحة 100%
-        - ✅ مجاني وسهل الاستخدام
-        - ✅ لا يحتاج خبرة في البرمجة
+        **Features:**
+        - ✅ Works with ANY dataset
+        - ✅ Understands English questions
+        - ✅ Generates 100% valid SPSS code
+        - ✅ No programming knowledge needed
+        - ✅ Free and easy to use
         
-        **أنواع التحليلات المدعومة:**
-        - جداول التكرار والإحصاءات الوصفية
-        - الرسوم البيانية (أعمدة، دائري، هيستوجرام)
-        - اختبارات الفرضيات (t-test, ANOVA)
-        - الارتباط والانحدار الخطي
-        - اكتشاف القيم المتطرفة
-        - اختبارات normality
+        **Supported Analysis Types:**
+        - Frequency tables and descriptive statistics
+        - Charts and graphs (bar, histogram, pie)
+        - Hypothesis testing (t-tests, ANOVA)
+        - Correlation and regression analysis
+        - Confidence intervals and normality tests
+        - Outlier detection
         """)
         
-        # أمثلة
-        with st.expander("📚 أمثلة على الملفات المدعومة"):
+        # Examples
+        with st.expander("📚 Example Files Format"):
             col_ex1, col_ex2 = st.columns(2)
             
             with col_ex1:
-                st.markdown("**مثال ملف بيانات (Excel):**")
-                st.code("""Customer_ID, Age, Income, Gender, City
-1, 25, 35000, M, Cairo
-2, 32, 45000, F, Alexandria
-3, 41, 52000, M, Giza
-4, 28, 38000, F, Luxor
-5, 35, 49000, M, Aswan""")
+                st.markdown("**Example Data File (CSV/Excel):**")
+                st.code("""ID,Age,Income,Gender,City,Satisfaction
+1,25,35000,M,New York,4
+2,32,45000,F,Chicago,5
+3,41,52000,M,Boston,3
+4,28,38000,F,Seattle,4
+5,35,49000,M,Miami,5""")
             
             with col_ex2:
-                st.markdown("**مثال ملف أسئلة (Text):**")
-                st.code("""1. Calculate mean and standard deviation of Income
-2. Create frequency table for Gender
-3. Draw histogram for Age
+                st.markdown("**Example Questions File (TXT):**")
+                st.code("""1. Calculate mean and standard deviation of Age and Income
+2. Create frequency table for Gender and City
+3. Draw histogram for Income
 4. Compare Income between males and females
 5. Test if average Age is 30 years
-6. Check correlation between Age and Income""")
-        
-        with st.expander("🌐 لغات مدعومة"):
-            st.markdown("""
-            **الأسئلة مدعومة بأي لغة:**
-            - العربية ✓
-            - الإنجليزية ✓
-            - الفرنسية ✓
-            - الأسبانية ✓
-            - أي لغة أخرى ✓
-            
-            **الكود المُولد يكون دائماً:** بالإنجليزية (لغة SPSS الرسمية)
-            """)
+6. Check correlation between Age and Income
+7. Create bar chart of average Satisfaction by City
+8. Calculate 95% confidence interval for Income
+9. Detect outliers in Income
+10. Test normality of Age distribution""")
 
 if __name__ == "__main__":
     main()
