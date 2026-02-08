@@ -852,4 +852,11 @@ REGRESSION
     # تذييل الصفحة
     st.markdown("---")
     st.markdown("""
-    <div style='text-align
+    <div style='text-align: center; color: #666;' class='arabic-text'>
+        <p>مولد أكواد SPSS التفاعلي | تم التطوير باستخدام Streamlit و Python</p>
+        <p>© 2024 - جميع الحقوق محفوظة</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
