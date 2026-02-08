@@ -3,10 +3,8 @@ import pandas as pd
 import numpy as np
 import os
 import re
-import tempfile
-from pathlib import Path
 import base64
-from io import BytesIO
+from io import StringIO
 
 # إعداد صفحة Streamlit
 st.set_page_config(
@@ -74,6 +72,10 @@ st.markdown("""
     }
     .stButton>button:hover {
         background-color: #1D4ED8;
+    }
+    .arabic-text {
+        direction: rtl;
+        text-align: right;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -156,6 +158,16 @@ class SPSSStreamlitApp:
         """كود جداول التكرار"""
         code = f"* {question}\n"
         code += "FREQUENCIES VARIABLES=\n"
+        
+        if df is not None:
+            # عرض المتغيرات المتاحة
+            vars_list = " ".join(df.columns[:5]) if len(df.columns) > 5 else " ".join(df.columns)
+            code += f"  {vars_list}\n"
+            if len(df.columns) > 5:
+                code += f"* There are {len(df.columns)} variables in total\n"
+        else:
+            code += "  Variable1 Variable2 Variable3\n"
+        
         code += "  /ORDER=ANALYSIS\n"
         code += "  /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MINIMUM MAXIMUM\n"
         code += "  /BARCHART FREQ\n"
@@ -163,11 +175,6 @@ class SPSSStreamlitApp:
         code += "  /HISTOGRAM NORMAL\n"
         code += "  /FORMAT=NOTABLE\n"
         code += "  /MISSING=INCLUDE.\n\n"
-        
-        if df is not None:
-            code += "* Available variables in your dataset:\n"
-            for col in df.columns:
-                code += f"*   {col}\n"
         
         return code
     
@@ -288,6 +295,19 @@ class SPSSStreamlitApp:
         code += "  /NOTOTAL.\n\n"
         
         return code
+    
+    def get_dataframe_info(self, df):
+        """الحصول على معلومات DataFrame بدون استخدام buffer"""
+        info_str = f"DataFrame Shape: {df.shape[0]} rows × {df.shape[1]} columns\n"
+        info_str += f"Columns: {list(df.columns)}\n\n"
+        
+        info_str += "Data Types:\n"
+        for col, dtype in df.dtypes.items():
+            info_str += f"  {col}: {dtype}\n"
+        
+        info_str += f"\nMemory Usage: {df.memory_usage(deep=True).sum() / 1024 ** 2:.2f} MB\n"
+        
+        return info_str
 
 # إنشاء تطبيق Streamlit
 def main():
@@ -295,7 +315,7 @@ def main():
     
     # عنوان التطبيق
     st.markdown('<h1 class="main-header">📊 مولد أكواد SPSS التفاعلي</h1>', unsafe_allow_html=True)
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
+    st.markdown('<div class="section-box arabic-text">', unsafe_allow_html=True)
     st.markdown("### 🚀 أهلاً بك في مولد أكواد SPSS الأوتوماتيكي")
     st.markdown("قم بتحميل ملفات Excel وWord لإنشاء أكواد SPSS جاهزة للاستخدام")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -303,7 +323,7 @@ def main():
     # الشريط الجانبي
     with st.sidebar:
         st.markdown("## ⚙️ الإعدادات")
-        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+        st.markdown('<div class="warning-box arabic-text">', unsafe_allow_html=True)
         st.info("""
         **تعليمات الاستخدام:**
         1. قم بتحميل ملف Excel (البيانات)
@@ -314,16 +334,24 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("## 📁 الملفات المرفوعة")
-        uploaded_files = st.file_uploader(
-            "اختر ملفات Excel وWord",
-            type=['xls', 'xlsx', 'doc', 'docx', 'txt'],
-            accept_multiple_files=True
+        
+        # إظهار الملفات المرفوعة حالياً
+        if 'excel' in app.uploaded_files:
+            st.success(f"📊 {app.uploaded_files['excel']['name']}")
+        if 'word' in app.uploaded_files:
+            st.success(f"📝 {app.uploaded_files['word']['name']}")
+        
+        st.markdown("---")
+        st.markdown("### 🎯 توليد سريع")
+        
+        # خيارات سريعة
+        quick_options = st.selectbox(
+            "اختر تحليل سريع",
+            ["", "الإحصاءات الوصفية", "الرسوم البيانية", "اختبارات الفرضيات", "الانحدار الخطي"]
         )
         
-        if uploaded_files:
-            for uploaded_file in uploaded_files:
-                file_type = "Excel" if uploaded_file.name.endswith(('.xls', '.xlsx')) else "Word"
-                st.success(f"✓ {file_type}: {uploaded_file.name}")
+        if quick_options:
+            st.session_state.quick_analysis = quick_options
     
     # علامات التبويب الرئيسية
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -334,54 +362,60 @@ def main():
     ])
     
     with tab1:
-        st.markdown('<div class="sub-header">تحميل ملفات البيانات والأسئلة</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header arabic-text">تحميل ملفات البيانات والأسئلة</div>', unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### ملف Excel (البيانات)")
+            st.markdown("### 📊 ملف Excel (البيانات)")
             excel_file = st.file_uploader("اختر ملف Excel", type=['xls', 'xlsx'], key="excel_uploader")
             
             if excel_file is not None:
                 try:
                     df = pd.read_excel(excel_file)
-                    st.success(f"تم تحميل ملف Excel بنجاح! ({len(df)} صف، {len(df.columns)} عمود)")
+                    st.success(f"✅ تم تحميل ملف Excel بنجاح! ({len(df)} صف، {len(df.columns)} عمود)")
                     
                     # عرض عينة من البيانات
-                    with st.expander("عرض عينة من البيانات"):
-                        st.dataframe(df.head())
-                        st.write(f"**أسماء الأعمدة:** {list(df.columns)}")
+                    with st.expander("👁️ عرض عينة من البيانات"):
+                        st.dataframe(df.head(10), use_container_width=True)
                         
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.write(f"**عدد الصفوف:** {len(df)}")
+                            st.write(f"**عدد الأعمدة:** {len(df.columns)}")
+                        with col_b:
+                            st.write(f"**البيانات المفقودة:** {df.isnull().sum().sum()}")
+                            st.write(f"**المتغيرات الرقمية:** {len(df.select_dtypes(include=[np.number]).columns)}")
+                    
                     app.uploaded_files['excel'] = {
                         'name': excel_file.name,
                         'data': df,
                         'columns': list(df.columns)
                     }
                 except Exception as e:
-                    st.error(f"خطأ في قراءة ملف Excel: {str(e)}")
+                    st.error(f"❌ خطأ في قراءة ملف Excel: {str(e)}")
         
         with col2:
-            st.markdown("### ملف Word/Text (الأسئلة)")
-            word_file = st.file_uploader("اختر ملف الأسئلة", type=['doc', 'docx', 'txt'], key="word_uploader")
+            st.markdown("### 📝 ملف الأسئلة")
+            word_file = st.file_uploader("اختر ملف الأسئلة (Word أو Text)", 
+                                       type=['txt'], 
+                                       key="word_uploader")
             
             if word_file is not None:
                 try:
-                    if word_file.name.endswith(('.doc', '.docx')):
-                        # لملفات Word، نقرأ النص مباشرة
-                        text_content = word_file.getvalue().decode('utf-8', errors='ignore')
-                    else:
-                        text_content = word_file.getvalue().decode('utf-8')
+                    # قراءة ملف النص
+                    text_content = word_file.getvalue().decode('utf-8')
                     
                     questions = app.parse_questions(text_content)
                     
-                    st.success(f"تم تحميل ملف الأسئلة بنجاح! ({len(questions)} سؤال)")
+                    st.success(f"✅ تم تحميل ملف الأسئلة بنجاح! ({len(questions)} سؤال)")
                     
                     # عرض الأسئلة
-                    with st.expander("عرض الأسئلة المحللة"):
-                        for i, q in enumerate(questions[:10], 1):
-                            st.write(f"**{i}.** {q[:100]}...")
-                        if len(questions) > 10:
-                            st.write(f"و {len(questions)-10} أسئلة إضافية...")
+                    with st.expander("📋 عرض الأسئلة المحللة"):
+                        for i, q in enumerate(questions[:5], 1):
+                            st.write(f"**{i}.** {q[:150]}..." if len(q) > 150 else f"**{i}.** {q}")
+                        if len(questions) > 5:
+                            st.write(f"*و {len(questions)-5} أسئلة إضافية...*")
                     
                     app.uploaded_files['word'] = {
                         'name': word_file.name,
@@ -389,151 +423,266 @@ def main():
                         'content': text_content
                     }
                 except Exception as e:
-                    st.error(f"خطأ في قراءة ملف الأسئلة: {str(e)}")
+                    st.error(f"❌ خطأ في قراءة ملف الأسئلة: {str(e)}")
+        
+        # زر لتوليد الكود مباشرة
+        if 'excel' in app.uploaded_files and 'word' in app.uploaded_files:
+            st.markdown("---")
+            if st.button("🚀 انتقل إلى توليد الأكواد", use_container_width=True):
+                st.session_state.current_tab = 2
+                st.rerun()
     
     with tab2:
-        st.markdown('<div class="sub-header">توليد أكواد SPSS</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header arabic-text">توليد أكواد SPSS</div>', unsafe_allow_html=True)
         
         if 'excel' not in app.uploaded_files or 'word' not in app.uploaded_files:
-            st.warning("⚠️ يرجى تحميل ملف Excel وملف الأسئلة أولاً")
+            st.warning("⚠️ يرجى تحميل ملف Excel وملف الأسئلة أولاً في علامة تبويب 'تحميل الملفات'")
         else:
             col1, col2 = st.columns([1, 3])
             
             with col1:
-                if st.button("🚀 توليد أكواد SPSS", use_container_width=True):
-                    with st.spinner("جاري توليد الأكواد..."):
+                st.markdown("### ⚙️ إعدادات التوليد")
+                
+                # خيارات التوليد
+                include_descriptive = st.checkbox("تضمين الإحصاءات الوصفية", value=True)
+                include_charts = st.checkbox("تضمين الرسوم البيانية", value=True)
+                include_tests = st.checkbox("تضمين اختبارات الفرضيات", value=True)
+                
+                generate_button = st.button("🚀 توليد أكواد SPSS", 
+                                          use_container_width=True,
+                                          type="primary")
+            
+            with col2:
+                if generate_button:
+                    with st.spinner("🔄 جاري توليد الأكواد..."):
                         df = app.uploaded_files['excel']['data']
                         questions = app.uploaded_files['word']['questions']
                         
                         # توليد الكود الكامل
-                        full_code = "* SPSS Syntax Generated Automatically\n"
-                        full_code += "* Data File: " + app.uploaded_files['excel']['name'] + "\n"
-                        full_code += "* Questions File: " + app.uploaded_files['word']['name'] + "\n"
-                        full_code += "* Generated by SPSS Streamlit Generator\n"
+                        full_code = f"* SPSS Syntax Generated Automatically\n"
+                        full_code += f"* Data File: {app.uploaded_files['excel']['name']}\n"
+                        full_code += f"* Questions File: {app.uploaded_files['word']['name']}\n"
+                        full_code += f"* Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        full_code += f"* Total Questions: {len(questions)}\n"
                         full_code += "************************************************.\n\n"
                         
                         # توليد كود لكل سؤال
+                        progress_bar = st.progress(0)
                         for i, question in enumerate(questions, 1):
-                            full_code += f"* Question {i}: {question}\n"
-                            full_code += app.generate_spss_code_for_question(question, df)
-                            full_code += "************************************************.\n\n"
+                            question_code = f"* Question {i}: {question}\n"
+                            question_code += app.generate_spss_code_for_question(question, df)
+                            full_code += question_code
+                            full_code += "*" * 48 + ".\n\n"
+                            
+                            # تحديث شريط التقدم
+                            progress_bar.progress(i / len(questions))
+                        
+                        # إضافة تذييل
+                        full_code += "* End of SPSS Syntax\n"
+                        full_code += "* Replace variable names with your actual variable names\n"
+                        full_code += "* Save this file with .sps extension\n"
                         
                         app.generated_codes['full'] = full_code
                         
-                        st.success("✅ تم توليد أكواد SPSS بنجاح!")
+                        st.success(f"✅ تم توليد {len(questions)} كود SPSS بنجاح!")
                         
-                        # رابط تحميل
-                        st.markdown(app.create_download_link(full_code, "SPSS_Generated_Code.sps"), unsafe_allow_html=True)
+                        # عرض إحصائيات
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("عدد الأسئلة", len(questions))
+                        with col_b:
+                            st.metric("طول الكود", f"{len(full_code):,} حرف")
+                        with col_c:
+                            st.metric("عدد الأسطر", full_code.count('\n'))
             
-            with col2:
-                if 'full' in app.generated_codes:
-                    st.markdown("### 📋 كود SPSS المُنشأ")
-                    
-                    # عرض جزء من الكود
-                    with st.expander("عرض الكود الكامل", expanded=True):
-                        st.code(app.generated_codes['full'], language='text')
-                    
-                    # خيارات إضافية
-                    st.markdown("### 🛠️ خيارات متقدمة")
-                    
-                    col_a, col_b, col_c = st.columns(3)
-                    
-                    with col_a:
-                        if st.button("📥 حفظ الكود", use_container_width=True):
-                            with open("SPSS_Code.sps", "w", encoding="utf-8") as f:
-                                f.write(app.generated_codes['full'])
-                            st.success("تم حفظ الملف: SPSS_Code.sps")
-                    
-                    with col_b:
-                        if st.button("🔄 إعادة توليد", use_container_width=True):
-                            st.rerun()
-                    
-                    with col_c:
-                        if st.button("🧹 مسح الكل", use_container_width=True):
-                            app.generated_codes = {}
-                            st.rerun()
+            # عرض الكود المولد
+            if 'full' in app.generated_codes:
+                st.markdown("### 📋 كود SPSS المُنشأ")
+                
+                # عرض جزء من الكود مع إمكانية التمرير
+                code_display = st.text_area(
+                    "الكود المولد",
+                    value=app.generated_codes['full'],
+                    height=400,
+                    label_visibility="collapsed"
+                )
+                
+                # أزرار التنزيل والإجراءات
+                st.markdown("---")
+                col_dl1, col_dl2, col_dl3 = st.columns(3)
+                
+                with col_dl1:
+                    st.markdown(app.create_download_link(app.generated_codes['full'], "SPSS_Code.sps"), 
+                              unsafe_allow_html=True)
+                
+                with col_dl2:
+                    if st.button("📋 نسخ إلى الحافظة", use_container_width=True):
+                        st.code(app.generated_codes['full'][:1000] + "..." if len(app.generated_codes['full']) > 1000 else app.generated_codes['full'])
+                        st.success("تم نسخ جزء من الكود (استخدم زر التنزيل للكود الكامل)")
+                
+                with col_dl3:
+                    if st.button("🔄 توليد جديد", use_container_width=True):
+                        app.generated_codes = {}
+                        st.rerun()
     
     with tab3:
-        st.markdown('<div class="sub-header">عرض وتحليل البيانات</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header arabic-text">عرض وتحليل البيانات</div>', unsafe_allow_html=True)
         
         if 'excel' in app.uploaded_files:
             df = app.uploaded_files['excel']['data']
             
-            col1, col2, col3 = st.columns(3)
+            # إحصائيات سريعة
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
             
-            with col1:
-                st.metric("عدد الصفوف", len(df))
-            with col2:
-                st.metric("عدد الأعمدة", len(df.columns))
-            with col3:
-                st.metric("البيانات المفقودة", df.isnull().sum().sum())
+            with col_stat1:
+                st.metric("📊 عدد الصفوف", f"{len(df):,}")
+            with col_stat2:
+                st.metric("📈 عدد الأعمدة", len(df.columns))
+            with col_stat3:
+                missing_total = df.isnull().sum().sum()
+                st.metric("⚠️ البيانات المفقودة", f"{missing_total:,}")
+            with col_stat4:
+                numeric_cols = len(df.select_dtypes(include=[np.number]).columns)
+                st.metric("🔢 متغيرات رقمية", numeric_cols)
             
-            # تحليل البيانات
-            st.markdown("### 📈 الإحصاءات الوصفية")
+            # علامات تبويب التحليل
+            analysis_tab1, analysis_tab2, analysis_tab3, analysis_tab4 = st.tabs([
+                "👁️ معاينة البيانات", 
+                "📈 الإحصاءات", 
+                "🔍 تحليل المتغيرات", 
+                "📊 الرسوم البيانية"
+            ])
             
-            tab_desc, tab_info, tab_missing = st.tabs(["الإحصاءات", "معلومات البيانات", "القيم المفقودة"])
+            with analysis_tab1:
+                st.dataframe(df, use_container_width=True)
+                
+                # خيارات المعاينة
+                col_view1, col_view2 = st.columns(2)
+                with col_view1:
+                    show_rows = st.slider("عدد الصفوف للعرض", 5, 100, 20)
+                with col_view2:
+                    selected_columns = st.multiselect(
+                        "اختر الأعمدة للعرض",
+                        options=df.columns.tolist(),
+                        default=df.columns.tolist()[:5] if len(df.columns) > 5 else df.columns.tolist()
+                    )
+                
+                if selected_columns:
+                    st.dataframe(df[selected_columns].head(show_rows), use_container_width=True)
             
-            with tab_desc:
-                if st.button("إظهار الإحصاءات الوصفية"):
-                    st.dataframe(df.describe())
-            
-            with tab_info:
-                buffer = BytesIO()
-                df.info(buf=buffer)
-                info_str = buffer.getvalue().decode('utf-8')
-                st.text(info_str)
-            
-            with tab_missing:
-                missing_data = df.isnull().sum()
-                if missing_data.sum() > 0:
-                    st.write("القيم المفقودة في كل عمود:")
-                    st.dataframe(missing_data[missing_data > 0])
+            with analysis_tab2:
+                st.markdown("### الإحصاءات الوصفية")
+                
+                # اختيار المتغيرات الرقمية
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                if numeric_cols:
+                    selected_numeric = st.multiselect(
+                        "اختر المتغيرات الرقمية للإحصاءات",
+                        options=numeric_cols,
+                        default=numeric_cols[:3] if len(numeric_cols) >= 3 else numeric_cols
+                    )
+                    
+                    if selected_numeric:
+                        st.dataframe(df[selected_numeric].describe(), use_container_width=True)
+                        
+                        # إحصائيات إضافية
+                        col_extra1, col_extra2 = st.columns(2)
+                        with col_extra1:
+                            st.write("**القيم المفقودة:**")
+                            missing_df = df[selected_numeric].isnull().sum()
+                            st.dataframe(missing_df[missing_df > 0] if missing_df.sum() > 0 else pd.DataFrame({"القيم المفقودة": [0]}))
+                        
+                        with col_extra2:
+                            st.write("**نوع البيانات:**")
+                            dtypes_df = df[selected_numeric].dtypes
+                            st.dataframe(dtypes_df)
                 else:
-                    st.success("لا توجد قيم مفقودة في البيانات!")
+                    st.warning("لا توجد متغيرات رقمية في البيانات")
             
-            # اختيار متغيرات للتحليل
-            st.markdown("### 🔍 تحليل متغيرات محددة")
-            
-            if len(df.columns) > 0:
-                selected_vars = st.multiselect(
-                    "اختر المتغيرات للتحليل",
-                    options=df.columns.tolist(),
-                    default=df.columns.tolist()[:3] if len(df.columns) >= 3 else df.columns.tolist()
+            with analysis_tab3:
+                st.markdown("### تحليل المتغيرات الفردية")
+                
+                selected_var = st.selectbox(
+                    "اختر متغير للتحليل",
+                    options=df.columns.tolist()
                 )
                 
-                if selected_vars:
-                    selected_df = df[selected_vars]
-                    st.dataframe(selected_df.describe())
+                if selected_var:
+                    col_var1, col_var2 = st.columns(2)
                     
-                    # رسم بياني سريع
-                    if st.checkbox("عرض رسم بياني"):
-                        chart_type = st.selectbox("نوع الرسم البياني", ["خطي", "عمودي", "مبعثر"])
+                    with col_var1:
+                        st.write(f"**المتغير:** {selected_var}")
+                        st.write(f"**نوع البيانات:** {df[selected_var].dtype}")
+                        st.write(f"**القيم الفريدة:** {df[selected_var].nunique()}")
+                        st.write(f"**القيم المفقودة:** {df[selected_var].isnull().sum()}")
+                    
+                    with col_var2:
+                        if pd.api.types.is_numeric_dtype(df[selected_var]):
+                            stats = df[selected_var].describe()
+                            st.write("**الإحصاءات:**")
+                            for stat, value in stats.items():
+                                st.write(f"{stat}: {value:.4f}")
+                        else:
+                            st.write("**القيم الأكثر تكراراً:**")
+                            top_values = df[selected_var].value_counts().head(5)
+                            for value, count in top_values.items():
+                                st.write(f"{value}: {count}")
+            
+            with analysis_tab4:
+                st.markdown("### إنشاء رسوم بيانية سريعة")
+                
+                if len(df.select_dtypes(include=[np.number]).columns) >= 2:
+                    chart_col1, chart_col2 = st.columns(2)
+                    
+                    with chart_col1:
+                        x_var = st.selectbox(
+                            "المتغير على المحور X",
+                            options=df.select_dtypes(include=[np.number]).columns.tolist()
+                        )
+                    
+                    with chart_col2:
+                        y_var = st.selectbox(
+                            "المتغير على المحور Y",
+                            options=df.select_dtypes(include=[np.number]).columns.tolist()
+                        )
+                    
+                    if x_var and y_var and x_var != y_var:
+                        chart_type = st.selectbox(
+                            "نوع الرسم البياني",
+                            options=["مبعثر", "خطي", "عمودي", "منطقة"]
+                        )
                         
-                        if len(selected_vars) >= 2:
-                            try:
-                                if chart_type == "خطي":
-                                    st.line_chart(selected_df.iloc[:, :2])
-                                elif chart_type == "عمودي":
-                                    st.bar_chart(selected_df.iloc[:, :2])
-                                elif chart_type == "مبعثر":
-                                    st.scatter_chart(selected_df.iloc[:, :2])
-                            except:
-                                st.warning("تعذر إنشاء الرسم البياني مع البيانات المحددة")
+                        try:
+                            if chart_type == "مبعثر":
+                                st.scatter_chart(df[[x_var, y_var]].dropna())
+                            elif chart_type == "خطي":
+                                st.line_chart(df[[x_var, y_var]].dropna())
+                            elif chart_type == "عمودي":
+                                st.bar_chart(df[[x_var, y_var]].dropna())
+                            elif chart_type == "منطقة":
+                                st.area_chart(df[[x_var, y_var]].dropna())
+                        except Exception as e:
+                            st.error(f"تعذر إنشاء الرسم البياني: {str(e)}")
+                else:
+                    st.warning("تحتاج إلى متغيرين رقميين على الأقل لإنشاء رسم بياني")
+        
+        else:
+            st.info("📥 يرجى تحميل ملف Excel أولاً لعرض البيانات")
     
     with tab4:
-        st.markdown('<div class="sub-header">قوالب SPSS جاهزة</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header arabic-text">قوالب SPSS جاهزة</div>', unsafe_allow_html=True)
         
         st.markdown("""
+        <div class="arabic-text">
         ### 📝 اختر من القوالب الجاهزة
         
         يمكنك استخدام هذه القوالب مباشرة أو تعديلها لتناسب بياناتك
-        """)
+        </div>
+        """, unsafe_allow_html=True)
         
-        template_col1, template_col2 = st.columns(2)
-        
-        with template_col1:
-            st.markdown("#### 🎯 قالب الإحصاءات الوصفية")
-            descriptive_template = """
+        # عرض القوالب
+        template_options = {
+            "الإحصاءات الوصفية": """
 * Descriptive Statistics Template
 DESCRIPTIVES VARIABLES=ALL
   /STATISTICS=MEAN STDDEV MIN MAX SEMEAN VARIANCE KURTOSIS SKEWNESS RANGE.
@@ -541,15 +690,9 @@ DESCRIPTIVES VARIABLES=ALL
 FREQUENCIES VARIABLES=ALL
   /FORMAT=NOTABLE
   /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MINIMUM MAXIMUM.
-            """
+            """,
             
-            if st.button("نسخ قالب الإحصاءات", use_container_width=True):
-                st.code(descriptive_template, language='text')
-                st.markdown(app.create_download_link(descriptive_template, "Descriptive_Template.sps"), unsafe_allow_html=True)
-        
-        with template_col2:
-            st.markdown("#### 📊 قالب الرسوم البيانية")
-            charts_template = """
+            "الرسوم البيانية": """
 * Charts and Graphs Template
 GRAPH
   /BAR(SIMPLE)=MEAN(Var1) BY CategoryVar
@@ -562,19 +705,9 @@ GRAPH
 GRAPH
   /SCATTERPLOT(BIVAR)=Var1 WITH Var2
   /TITLE='Scatter Plot'.
-            """
+            """,
             
-            if st.button("نسخ قالب الرسوم", use_container_width=True):
-                st.code(charts_template, language='text')
-                st.markdown(app.create_download_link(charts_template, "Charts_Template.sps"), unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        advanced_col1, advanced_col2 = st.columns(2)
-        
-        with advanced_col1:
-            st.markdown("#### 🔬 قالب اختبارات الفرضيات")
-            hypothesis_template = """
+            "اختبارات الفرضيات": """
 * Hypothesis Testing Template
 * Independent t-test
 T-TEST GROUPS=GroupVar(1 2)
@@ -587,15 +720,9 @@ ONEWAY DependentVar BY GroupVar(1, 3)
   /STATISTICS DESCRIPTIVES HOMOGENEITY
   /MISSING ANALYSIS
   /POSTHOC=TUKEY LSD.
-            """
+            """,
             
-            if st.button("نسخ قالب الفرضيات", use_container_width=True):
-                st.code(hypothesis_template, language='text')
-                st.markdown(app.create_download_link(hypothesis_template, "Hypothesis_Template.sps"), unsafe_allow_html=True)
-        
-        with advanced_col2:
-            st.markdown("#### 📈 قالب الانحدار والارتباط")
-            regression_template = """
+            "الانحدار والارتباط": """
 * Regression and Correlation Template
 * Correlation
 CORRELATIONS
@@ -612,31 +739,51 @@ REGRESSION
   /DEPENDENT DependentVar
   /METHOD=ENTER IndependentVar1 IndependentVar2.
             """
+        }
+        
+        selected_template = st.selectbox(
+            "اختر قالب",
+            list(template_options.keys())
+        )
+        
+        if selected_template:
+            st.code(template_options[selected_template], language="text")
             
-            if st.button("نسخ قالب الانحدار", use_container_width=True):
-                st.code(regression_template, language='text')
-                st.markdown(app.create_download_link(regression_template, "Regression_Template.sps"), unsafe_allow_html=True)
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                st.markdown(app.create_download_link(
+                    template_options[selected_template], 
+                    f"SPSS_{selected_template.replace(' ', '_')}.sps"
+                ), unsafe_allow_html=True)
+            
+            with col_t2:
+                if st.button("📋 نسخ القالب", use_container_width=True):
+                    st.success(f"تم نسخ قالب {selected_template}")
         
-        # قالب متقدم شامل
+        # القالب الشامل
         st.markdown("---")
-        st.markdown("#### 🏆 القالب الشامل المتقدم")
+        st.markdown("### 🏆 القالب الشامل المتقدم")
         
-        if st.button("إنشاء القالب الشامل", use_container_width=True):
-            comprehensive_template = app.create_comprehensive_template()
-            st.code(comprehensive_template, language='text')
-            st.markdown(app.create_download_link(comprehensive_template, "SPSS_Master_Template.sps"), unsafe_allow_html=True)
+        if st.button("🔄 إنشاء القالب الشامل", use_container_width=True):
+            comprehensive_template = create_comprehensive_template()
+            st.code(comprehensive_template, language="text", height=400)
+            
+            st.markdown(app.create_download_link(
+                comprehensive_template,
+                "SPSS_Master_Template.sps"
+            ), unsafe_allow_html=True)
     
     # تذييل الصفحة
     st.markdown("---")
     st.markdown("""
-    <div style='text-align: center; color: #666;'>
+    <div style='text-align: center; color: #666;' class='arabic-text'>
         <p>مولد أكواد SPSS التفاعلي | تم التطوير باستخدام Streamlit و Python</p>
         <p>© 2024 - جميع الحقوق محفوظة</p>
     </div>
     """, unsafe_allow_html=True)
 
-# إنشاء القالب الشامل
 def create_comprehensive_template():
+    """إنشاء قالب SPSS شامل"""
     template = """* SPSS COMPREHENSIVE MASTER TEMPLATE
 ************************************************.
 
@@ -659,12 +806,6 @@ VALUE LABELS
   Gender 1 'Male' 2 'Female'
   Education 1 'High School' 2 'Bachelor' 3 'Master' 4 'PhD'.
 
-* Recode variables if needed.
-RECODE Age (Lowest thru 30=1) (31 thru 45=2) (46 thru 60=3) (61 thru Highest=4)
-  INTO Age_Group.
-VARIABLE LABELS Age_Group 'Age Groups'.
-VALUE LABELS Age_Group 1 '18-30' 2 '31-45' 3 '46-60' 4 '61+'.
-
 ************************************************.
 * 2. DESCRIPTIVE STATISTICS
 ************************************************.
@@ -685,23 +826,7 @@ EXAMINE VARIABLES=Income Score1 BY Gender
   /NOTOTAL.
 
 ************************************************.
-* 3. DATA VISUALIZATION
-************************************************.
-GRAPH
-  /BAR(GROUPED)=MEAN(Income) BY Education BY Gender
-  /TITLE='Average Income by Education and Gender'.
-
-GRAPH
-  /SCATTERPLOT(BIVAR)=Score1 WITH Score2 BY Gender
-  /MISSING=LISTWISE
-  /TITLE='Scatter Plot: Score1 vs Score2'.
-
-GRAPH
-  /HISTOGRAM(NORMAL)=Income
-  /TITLE='Income Distribution'.
-
-************************************************.
-* 4. INFERENTIAL STATISTICS - T-TESTS
+* 3. INFERENTIAL STATISTICS
 ************************************************.
 * Independent samples t-test.
 T-TEST GROUPS=Gender(1 2)
@@ -709,183 +834,18 @@ T-TEST GROUPS=Gender(1 2)
   /VARIABLES=Income Score1 Score2
   /CRITERIA=CI(.95).
 
-* Paired samples t-test.
-T-TEST PAIRS=Pre_Test WITH Post_Test (PAIRED)
-  /CRITERIA=CI(.9500)
-  /MISSING=ANALYSIS.
-
-* One-sample t-test.
-T-TEST
-  /TESTVAL=100
-  /MISSING=ANALYSIS
-  /VARIABLES=Score1
-  /CRITERIA=CI(.95).
-
-************************************************.
-* 5. ANALYSIS OF VARIANCE (ANOVA)
-************************************************.
 * One-way ANOVA.
 ONEWAY Score1 BY Education(1, 4)
-  /STATISTICS DESCRIPTIVES HOMOGENEITY BROWNFORSYTHE WELCH
+  /STATISTICS DESCRIPTIVES HOMOGENEITY
   /MISSING ANALYSIS
-  /POSTHOC=TUKEY LSD BONFERRONI ALPHA(0.05).
-
-* Two-way ANOVA.
-UNIANOVA Score1 BY Gender Education
-  /METHOD=SSTYPE(3)
-  /INTERCEPT=INCLUDE
-  /POSTHOC=Gender Education (TUKEY)
-  /EMMEANS=TABLES(Gender)
-  /EMMEANS=TABLES(Education)
-  /EMMEANS=TABLES(Gender*Education)
-  /PRINT=DESCRIPTIVE ETASQ HOMOGENEITY
-  /CRITERIA=ALPHA(.05)
-  /DESIGN=Gender Education Gender*Education.
+  /POSTHOC=TUKEY LSD ALPHA(0.05).
 
 ************************************************.
-* 6. CORRELATION ANALYSIS
+* 4. CORRELATION AND REGRESSION
 ************************************************.
 CORRELATIONS
   /VARIABLES=Income Age Score1 Score2
   /PRINT=TWOTAIL NOSIG
   /MISSING=PAIRWISE.
 
-* Partial correlation.
-PARTIAL CORR
-  /VARIABLES=Score1 Score2 BY Age
-  /SIGNIFICANCE=TWOTAIL
-  /STATISTICS=DESCRIPTIVES CORR
-  /MISSING=LISTWISE.
-
-************************************************.
-* 7. REGRESSION ANALYSIS
-************************************************.
-* Multiple linear regression.
 REGRESSION
-  /DESCRIPTIVES MEAN STDDEV CORR SIG N
-  /MISSING LISTWISE
-  /STATISTICS COEFF OUTS R ANOVA COLLIN TOL CHANGE ZPP
-  /CRITERIA=PIN(.05) POUT(.10)
-  /NOORIGIN
-  /DEPENDENT Score1
-  /METHOD=ENTER Age Gender Education
-  /METHOD=STEPWISE Income
-  /SCATTERPLOT=(*ZRESID ,*ZPRED)
-  /RESIDUALS DURBIN HISTOGRAM(ZRESID) NORMPROB(ZRESID).
-
-* Logistic regression (if binary dependent variable).
-LOGISTIC REGRESSION VARIABLES=Success
-  /METHOD=ENTER Age Income Education
-  /CONTRAST (Education)=Indicator
-  /CLASSPLOT
-  /CASEWISE OUTLIER(2)
-  /PRINT=GOODFIT CI(95)
-  /CRITERIA=PIN(0.05) POUT(0.10) ITERATE(20) CUT(0.5).
-
-************************************************.
-* 8. NONPARAMETRIC TESTS
-************************************************.
-* Mann-Whitney U test.
-NPAR TESTS
-  /M-W= Income BY Gender(1 2)
-  /MISSING ANALYSIS.
-
-* Kruskal-Wallis test.
-NPAR TESTS
-  /K-W= Income BY Education(1 4)
-  /MISSING ANALYSIS.
-
-* Wilcoxon signed-rank test.
-NPAR TESTS
-  /WILCOXON=Pre_Test WITH Post_Test (PAIRED)
-  /MISSING ANALYSIS.
-
-************************************************.
-* 9. RELIABILITY ANALYSIS
-************************************************.
-RELIABILITY
-  /VARIABLES=Item1 Item2 Item3 Item4 Item5
-  /SCALE('Total Scale') ALL
-  /MODEL=ALPHA
-  /STATISTICS=DESCRIPTIVE SCALE
-  /SUMMARY=TOTAL.
-
-************************************************.
-* 10. FACTOR ANALYSIS
-************************************************.
-FACTOR
-  /VARIABLES=Item1 TO Item10
-  /MISSING LISTWISE
-  /ANALYSIS Item1 TO Item10
-  /PRINT INITIAL EXTRACTION ROTATION
-  /PLOT EIGEN
-  /CRITERIA MINEIGEN(1) ITERATE(25)
-  /EXTRACTION PC
-  /CRITERIA ITERATE(25)
-  /ROTATION VARIMAX
-  /METHOD=CORRELATION.
-
-************************************************.
-* 11. DATA MANAGEMENT
-************************************************.
-* Compute new variables.
-COMPUTE BMI = Weight / ((Height/100) ** 2).
-VARIABLE LABELS BMI 'Body Mass Index'.
-
-* Standardize variables.
-DESCRIPTIVES VARIABLES=Score1 Score2
-  /SAVE
-  /STATISTICS=MEAN STDDEV MIN MAX.
-
-* Split file for separate analyses.
-SORT CASES BY Gender.
-SPLIT FILE LAYERED BY Gender.
-
-* Run analysis for each group.
-DESCRIPTIVES VARIABLES=Income Age
-  /STATISTICS=MEAN STDDEV MIN MAX.
-
-* Reset split file.
-SPLIT FILE OFF.
-
-* Select specific cases.
-USE ALL.
-COMPUTE filter_$=(Age >= 18 & Age <= 65).
-VARIABLE LABELS filter_$ 'Age 18-65 (FILTER)'.
-FORMATS filter_$ (f1.0).
-FILTER BY filter_$.
-EXECUTE.
-
-* Run filtered analysis.
-DESCRIPTIVES VARIABLES=ALL
-  /STATISTICS=MEAN STDDEV.
-
-* Turn off filter.
-FILTER OFF.
-USE ALL.
-EXECUTE.
-
-************************************************.
-* 12. OUTPUT MANAGEMENT
-************************************************.
-* Set output options.
-SET PRINTBACK=ON.
-SET OVARS=LABELS.
-SET TVARS=LABELS.
-SET TNUMBERS=LABELS.
-
-* Save output to file.
-OUTPUT EXPORT
-  /CONTENTS= EXPORT=VISIBLE
-  /DOCUMENT DOCUMENTFILE='C:\\Output\\Analysis_Results.spv'.
-
-************************************************.
-* END OF TEMPLATE
-************************************************.
-* Remember to replace variable names with your actual variable names.
-* Save this syntax file and run in SPSS.
-"""
-    return template
-
-if __name__ == "__main__":
-    main()
