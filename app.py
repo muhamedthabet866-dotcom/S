@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from docx import Document
 import tempfile
 import os
 import re
@@ -34,42 +33,43 @@ class SPSSv26Solver:
         """استخراج تعريفات المتغيرات من ملف الأسئلة"""
         definitions = {}
         
-        # أنماط مختلفة لتعريفات المتغيرات
-        patterns = [
-            r'(X\d+)\s*=\s*(.*?)(?=\nX\d+\s*=|$)',  # X1 = تعريف
-            r'(x\d+)\s*=\s*(.*?)(?=\nx\d+\s*=|$)',  # x1 = تعريف
-            r'Where:\s*(.*?)(?=\n\n|$)',  # قسم Where
-            r'حيث:\s*(.*?)(?=\n\n|$)',  # قسم حيث
-        ]
-        
-        for pattern in patterns:
-            matches = re.finditer(pattern, self.questions_text, re.DOTALL | re.IGNORECASE)
-            for match in matches:
-                if match.group(1).upper().startswith('X'):
-                    var_name = match.group(1).upper().strip()
-                    definition = match.group(2).strip()
-                    definitions[var_name] = definition
-                elif 'where' in pattern.lower() or 'حيث' in pattern.lower():
-                    # استخراج تعريفات من قسم Where
-                    lines = match.group(1).split('\n')
-                    for line in lines:
-                        if '=' in line:
-                            parts = line.split('=')
-                            if len(parts) >= 2:
-                                var = parts[0].strip().upper()
-                                if var.startswith('X'):
-                                    definitions[var] = parts[1].strip()
-        
-        # بحث إضافي في النص
+        # تحويل النص إلى سطور
         lines = self.questions_text.split('\n')
+        
+        # البحث عن قسم Where أو حيث
+        start_where = False
         for line in lines:
+            line = line.strip()
             line_lower = line.lower()
-            if '=' in line and ('x' in line_lower or 'var' in line_lower):
-                parts = line.split('=')
-                if len(parts) >= 2:
-                    var = parts[0].strip().upper()
-                    if var.startswith('X'):
-                        definitions[var] = parts[1].strip()
+            
+            # بداية قسم التعريفات
+            if 'where:' in line_lower or 'حيث:' in line_lower:
+                start_where = True
+                continue
+            
+            # إذا كنا في قسم التعريفات
+            if start_where and line:
+                if '=' in line:
+                    parts = line.split('=', 1)
+                    if len(parts) == 2:
+                        var = parts[0].strip().upper()
+                        definition = parts[1].strip()
+                        if var.startswith('X'):
+                            definitions[var] = definition
+                else:
+                    # ربما انتهى قسم التعريفات
+                    break
+        
+        # البحث عن تعريفات في النص كله
+        for line in lines:
+            line = line.strip()
+            if '=' in line and ('X' in line or 'x' in line):
+                # نمط X1 = تعريف
+                match = re.match(r'([Xx]\d+)\s*=\s*(.+)', line)
+                if match:
+                    var = match.group(1).upper()
+                    definition = match.group(2).strip()
+                    definitions[var] = definition
         
         return definitions
     
@@ -106,12 +106,14 @@ class SPSSv26Solver:
                 else:
                     info['stat_type'] = 'CONTINUOUS'
                     info['measurement_level'] = 'SCALE'
-                    info['stats'] = {
-                        'mean': float(var_data.mean()) if not var_data.empty else 0,
-                        'std': float(var_data.std()) if not var_data.empty else 0,
-                        'min': float(var_data.min()) if not var_data.empty else 0,
-                        'max': float(var_data.max()) if not var_data.empty else 0
-                    }
+                    if not var_data.empty:
+                        info['stats'] = {
+                            'mean': float(var_data.mean()),
+                            'std': float(var_data.std()),
+                            'min': float(var_data.min()),
+                            'max': float(var_data.max()),
+                            'median': float(var_data.median())
+                        }
             else:
                 info['stat_type'] = 'STRING'
                 info['measurement_level'] = 'NOMINAL'
@@ -176,14 +178,14 @@ class SPSSv26Solver:
                     # من التعريف
                     if 'debit card' in definition:
                         if val == 0:
-                            labels[val] = "No debit card"
+                            labels[val] = "No"
                         elif val == 1:
-                            labels[val] = "Has debit card"
+                            labels[val] = "Yes"
                     elif 'interest' in definition:
                         if val == 0:
-                            labels[val] = "No interest"
+                            labels[val] = "No"
                         elif val == 1:
-                            labels[val] = "Receives interest"
+                            labels[val] = "Yes"
                     elif 'league' in definition:
                         if val == 0:
                             labels[val] = "National"
@@ -194,7 +196,7 @@ class SPSSv26Solver:
                             labels[val] = "Male"
                         elif val == 2:
                             labels[val] = "Female"
-                    elif 'city' in definition:
+                    elif 'city' in definition or 'location' in definition:
                         city_names = {1: "City A", 2: "City B", 3: "City C", 4: "City D"}
                         labels[val] = city_names.get(val, f"City {val}")
                     else:
@@ -215,26 +217,52 @@ class SPSSv26Solver:
             r'Q(\d+)[:\-]\s+(.*?)(?=\nQ\d+[:\.\-]|\n\n|$)',  # Q1: سؤال
         ]
         
+        # استخدام re.DOTALL لجعل النقطة تطابق الأسطر الجديدة
         for pattern in patterns:
-            matches = re.finditer(pattern, self.questions_text, re.DOTALL | re.IGNORECASE)
+            matches = re.finditer(pattern, self.questions_text, re.IGNORECASE)
             for match in matches:
-                q_num = match.group(1).strip()
-                q_text = match.group(2).strip()
-                
-                # تنظيف النص
-                q_text = re.sub(r'\s+', ' ', q_text)
-                
-                if q_text and len(q_text) > 10:
-                    try:
+                try:
+                    q_num = int(match.group(1).strip())
+                    q_text = match.group(2).strip()
+                    
+                    # تنظيف النص
+                    q_text = re.sub(r'\s+', ' ', q_text)
+                    
+                    if q_text and len(q_text) > 10:
                         questions.append({
-                            'number': int(q_num),
+                            'number': q_num,
                             'text': q_text[:150],
                             'full_text': q_text,
                             'type': self._detect_question_type(q_text),
                             'variables': self._extract_variables(q_text)
                         })
-                    except ValueError:
-                        continue
+                except (ValueError, IndexError):
+                    continue
+        
+        # إذا لم نجد أسئلة مرقمة، نبحث عن فقرات
+        if not questions:
+            lines = self.questions_text.split('\n')
+            q_num = 1
+            for line in lines:
+                line = line.strip()
+                if line and len(line) > 20:
+                    # تحقق إذا كان يحتوي على كلمات إحصائية
+                    stats_keywords = [
+                        'construct', 'calculate', 'draw', 'test', 'find',
+                        'create', 'build', 'analyze', 'compare', 'determine',
+                        'جدول', 'احسب', 'ارسم', 'اختبار', 'أوجد',
+                        'أنشئ', 'حلل', 'قارن', 'اكتشف'
+                    ]
+                    
+                    if any(keyword in line.lower() for keyword in stats_keywords):
+                        questions.append({
+                            'number': q_num,
+                            'text': line[:150],
+                            'full_text': line,
+                            'type': self._detect_question_type(line),
+                            'variables': self._extract_variables(line)
+                        })
+                        q_num += 1
         
         return sorted(questions, key=lambda x: x['number'])
     
@@ -279,8 +307,13 @@ class SPSSv26Solver:
             
             # البحث بالتعريف
             definition = self.variable_info[var_name].get('definition', '').lower()
-            if definition and any(word in text_lower for word in definition.split()[:3]):
-                found_vars.append(var_name)
+            if definition:
+                # تحقق من كلمات رئيسية في التعريف
+                def_words = definition.split()
+                for word in def_words[:3]:
+                    if word and len(word) > 2 and word in text_lower:
+                        found_vars.append(var_name)
+                        break
         
         return list(set(found_vars))
     
@@ -298,7 +331,7 @@ DATASET NAME ExamData WINDOW=FRONT.
 DATASET ACTIVATE ExamData.
 
 * -------------------------------------------------------------------------
-* VARIABLE DEFINITIONS BASED ON QUESTIONNAIRE
+* VARIABLE DEFINITIONS
 * -------------------------------------------------------------------------
 
 """
@@ -323,16 +356,13 @@ DATASET ACTIVATE ExamData.
         # حل الأسئلة
         syntax += self._generate_question_solutions()
         
-        # تحليلات إضافية
-        syntax += self._generate_additional_analyses()
-        
         # إنهاء
         syntax += """
 * -------------------------------------------------------------------------
 * SAVE AND CLEANUP
 * -------------------------------------------------------------------------
 
-SAVE OUTFILE='Exam_Analysis_v26.sav'
+SAVE OUTFILE='SPSS_Analysis_v26.sav'
   /COMPRESSED.
 EXECUTE.
 
@@ -347,7 +377,7 @@ EXECUTE.
     def _generate_derived_vars(self) -> str:
         """إنشاء متغيرات مشتقة"""
         syntax = "\n* -------------------------------------------------------------------------\n"
-        syntax += "* DERIVED VARIABLES FOR ANALYSIS\n"
+        syntax += "* DERIVED VARIABLES\n"
         syntax += "* -------------------------------------------------------------------------\n\n"
         
         # إنشاء فئات للبيانات المستمرة
@@ -358,8 +388,8 @@ EXECUTE.
                 syntax += f"RECODE {var_name} (LOWEST thru {mean_val:.2f}=1) ({mean_val:.2f} thru HIGHEST=2) INTO {var_name}_Cat.\n"
                 syntax += f"VARIABLE LABELS {var_name}_Cat '{var_name} Categories'.\n"
                 syntax += f"VALUE LABELS {var_name}_Cat\n"
-                syntax += f"  1 'Low (Below {mean_val:.0f})'\n"
-                syntax += f"  2 'High (Above {mean_val:.0f})'\n"
+                syntax += f"  1 'Low (Below Mean)'\n"
+                syntax += f"  2 'High (Above Mean)'\n"
                 syntax += ".\n\n"
         
         syntax += "EXECUTE.\n"
@@ -367,6 +397,9 @@ EXECUTE.
     
     def _generate_question_solutions(self) -> str:
         """توليد حلول للأسئلة"""
+        if not self.questions:
+            return "\n* No questions found in the text\n"
+        
         syntax = "\n* -------------------------------------------------------------------------\n"
         syntax += "* QUESTION SOLUTIONS\n"
         syntax += "* -------------------------------------------------------------------------\n\n"
@@ -383,6 +416,8 @@ EXECUTE.
         q_type = question['type']
         variables = question['variables']
         
+        syntax = f"* QUESTION {q_num}: {q_text}\n"
+        
         # إذا لم توجد متغيرات، نستخدم المتغيرات المناسبة
         if not variables:
             if q_type == 'frequency':
@@ -393,9 +428,6 @@ EXECUTE.
                            if info['stat_type'] == 'CONTINUOUS'][:2]
             elif q_type in ['histogram', 'bar_chart', 'pie_chart']:
                 variables = list(self.variable_info.keys())[:2]
-        
-        syntax = f"* QUESTION {q_num}: {q_text}\n"
-        syntax += f"* Analysis Type: {q_type}\n"
         
         if variables:
             syntax += f"* Variables: {', '.join(variables)}\n"
@@ -410,14 +442,15 @@ EXECUTE.
         elif q_type == 'descriptive':
             if variables:
                 syntax += f"DESCRIPTIVES VARIABLES={' '.join(variables)}\n"
-                syntax += "  /STATISTICS=MEAN MEDIAN MODE STDDEV MIN MAX SKEWNESS.\n"
+                syntax += "  /STATISTICS=MEAN MEDIAN MODE STDDEV MIN MAX SKEWNESS SESKEW.\n"
         
         elif q_type == 'histogram':
-            for var in variables[:2]:
-                if self.variable_info[var]['stat_type'] == 'CONTINUOUS':
-                    syntax += f"GRAPH\n"
-                    syntax += f"  /HISTOGRAM={var}\n"
-                    syntax += f"  /TITLE='Histogram of {var}'.\n"
+            if variables:
+                for var in variables[:2]:
+                    if self.variable_info[var]['stat_type'] == 'CONTINUOUS':
+                        syntax += f"GRAPH\n"
+                        syntax += f"  /HISTOGRAM={var}\n"
+                        syntax += f"  /TITLE='Histogram of {var}'.\n"
         
         elif q_type == 'bar_chart':
             if len(variables) >= 2:
@@ -471,43 +504,6 @@ EXECUTE.
         
         syntax += "EXECUTE.\n\n"
         return syntax
-    
-    def _generate_additional_analyses(self) -> str:
-        """تحليلات إضافية تلقائية"""
-        syntax = "\n* -------------------------------------------------------------------------\n"
-        syntax += "* ADDITIONAL ANALYSES\n"
-        syntax += "* -------------------------------------------------------------------------\n\n"
-        
-        continuous_vars = [v for v, info in self.variable_info.items() 
-                         if info['stat_type'] == 'CONTINUOUS']
-        categorical_vars = [v for v, info in self.variable_info.items() 
-                          if info['stat_type'] == 'CATEGORICAL']
-        
-        if continuous_vars:
-            syntax += "* Descriptive statistics for all continuous variables\n"
-            syntax += f"DESCRIPTIVES VARIABLES={' '.join(continuous_vars[:5])}\n"
-            syntax += "  /STATISTICS=MEAN STDDEV MIN MAX.\n\n"
-        
-        if categorical_vars:
-            syntax += "* Frequency tables for all categorical variables\n"
-            syntax += f"FREQUENCIES VARIABLES={' '.join(categorical_vars[:3])}\n"
-            syntax += "  /BARCHART FREQ\n"
-            syntax += "  /ORDER=ANALYSIS.\n\n"
-        
-        if len(continuous_vars) >= 2:
-            syntax += "* Correlation analysis\n"
-            syntax += f"CORRELATIONS\n"
-            syntax += f"  /VARIABLES={' '.join(continuous_vars[:4])}\n"
-            syntax += "  /PRINT=TWOTAIL NOSIG\n"
-            syntax += "  /MISSING=PAIRWISE.\n\n"
-        
-        if continuous_vars and categorical_vars:
-            syntax += "* Means comparison\n"
-            syntax += f"MEANS TABLES={continuous_vars[0]} BY {categorical_vars[0]}\n"
-            syntax += "  /CELLS=MEAN COUNT STDDEV.\n\n"
-        
-        syntax += "EXECUTE.\n"
-        return syntax
 
 # ===== واجهة Streamlit =====
 
@@ -518,7 +514,7 @@ def main():
         
         st.subheader("1. ملف البيانات")
         data_file = st.file_uploader(
-            "رفع ملف Excel/CSV",
+            "رفع ملف Excel أو CSV",
             type=['xls', 'xlsx', 'csv'],
             key="data_file"
         )
@@ -527,17 +523,10 @@ def main():
         
         st.subheader("2. ملف الأسئلة")
         questions_file = st.file_uploader(
-            "رفع ملف Word/Text",
-            type=['docx', 'doc', 'txt'],
-            key="questions_file"
-        )
-        
-        st.markdown("---")
-        
-        st.subheader("⚙️ خيارات الإخراج")
-        output_format = st.radio(
-            "تنسيق المخرج:",
-            ["📄 SPSS Syntax فقط", "📊 تقرير كامل", "💾 حفظ البيانات"]
+            "رفع ملف نصي أو Word (بدون python-docx)",
+            type=['txt'],
+            key="questions_file",
+            help="يرجى حفظ ملف Word كملف نصي (.txt) أولاً"
         )
         
         st.markdown("---")
@@ -555,22 +544,28 @@ def main():
             st.markdown("""
             ### خطوات الاستخدام:
             
-            1. **رفع ملف البيانات** (Excel/CSV):
+            1. **رفع ملف البيانات** (Excel أو CSV):
                - يجب أن يحتوي على البيانات الخام
                - الأسماء في الصف الأول
                - يمكن أن تكون أي بيانات إحصائية
             
-            2. **رفع ملف الأسئلة** (Word/Text):
+            2. **رفع ملف الأسئلة** (ملف نصي .txt):
+               - احفظ ملف Word كـ .txt أولاً
                - يجب أن يحتوي على الأسئلة الإحصائية
                - يمكن أن يحتوي على تعريفات المتغيرات
-               - مثال: X1 = Account Balance in $
             
             3. **توليد الحل**:
                - سيقوم البرنامج بقراءة التعريفات من الأسئلة
                - سيحلل كل سؤال تلقائياً
                - سيولد كود SPSS v26 كامل
             
-            ### مثال على ملف الأسئلة:
+            ### كيفية حفظ ملف Word كـ .txt:
+            1. افتح ملف Word
+            2. انقر على "ملف" → "حفظ باسم"
+            3. اختر "نص عادي (*.txt)"
+            4. احفظ الملف
+            
+            ### مثال على ملف الأسئلة (ملف .txt):
             ```
             1. Construct frequency tables for categorical variables
             
@@ -586,13 +581,14 @@ def main():
     elif data_file and st.session_state.get('generate', False):
         try:
             # تحميل البيانات
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.tmp') as tmp:
                 tmp.write(data_file.getvalue())
                 data_path = tmp.name
             
+            # تحديد نوع الملف وقراءته
             if data_file.name.lower().endswith('.csv'):
                 df = pd.read_csv(data_path)
-            else:
+            else:  # Excel
                 df = pd.read_excel(data_path)
             
             os.unlink(data_path)
@@ -600,18 +596,11 @@ def main():
             # تحميل الأسئلة
             questions_text = ""
             if questions_file:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.tmp') as tmp:
-                    tmp.write(questions_file.getvalue())
-                    questions_path = tmp.name
-                
-                if questions_file.name.lower().endswith(('.docx', '.doc')):
-                    doc = Document(questions_path)
-                    questions_text = "\n".join([para.text for para in doc.paragraphs])
-                else:
-                    with open(questions_path, 'r', encoding='utf-8') as f:
-                        questions_text = f.read()
-                
-                os.unlink(questions_path)
+                # قراءة الملف النصي
+                questions_text = questions_file.getvalue().decode('utf-8', errors='ignore')
+                st.success(f"✅ تم تحميل ملف الأسئلة ({len(questions_text.split())} كلمة)")
+            else:
+                st.info("ℹ️ لم يتم رفع ملف أسئلة، سيتم إنشاء أسئلة افتراضية")
             
             # إنشاء المحلل
             with st.spinner("🔍 جاري تحليل الملفات..."):
@@ -635,15 +624,17 @@ def main():
                             st.markdown(f"**{var}**: {definition}")
                     else:
                         st.info("لم يتم العثور على تعريفات في ملف الأسئلة")
+                        st.markdown("**التعريفات المقترحة:**")
+                        for var_name, info in solver.variable_info.items():
+                            st.markdown(f"**{var_name}**: {info.get('definition', 'N/A')}")
                 
-                # عرض تحليل المتغيرات
-                with st.expander("🔍 تحليل البيانات"):
-                    st.dataframe(df.describe())
+                # عرض البيانات
+                with st.expander("🔍 معاينة البيانات"):
+                    st.dataframe(df.head(10))
                     
-                    # أنواع البيانات
-                    type_counts = pd.Series([info['stat_type'] for info in solver.variable_info.values()]).value_counts()
-                    st.write("**أنواع المتغيرات:**")
-                    st.write(type_counts)
+                    # إحصائيات سريعة
+                    st.markdown("**ملخص البيانات:**")
+                    st.write(df.describe())
                 
                 # توليد كود SPSS
                 st.markdown("---")
@@ -665,19 +656,29 @@ def main():
                 
                 # عرض تحليل الأسئلة
                 with st.expander("📝 تحليل الأسئلة"):
-                    for q in solver.questions:
-                        st.markdown(f"**{q['number']}. {q['text']}**")
-                        st.caption(f"النوع: {q['type']} | المتغيرات: {', '.join(q['variables']) if q['variables'] else 'Auto-selected'}")
+                    if solver.questions:
+                        for q in solver.questions:
+                            st.markdown(f"**{q['number']}. {q['text']}**")
+                            st.caption(f"النوع: {q['type']}")
+                            if q['variables']:
+                                st.caption(f"المتغيرات: {', '.join(q['variables'])}")
+                            st.markdown("---")
+                    else:
+                        st.info("لم يتم العثور على أسئلة في الملف")
                 
-                # عرض كود مثال
-                with st.expander("🔧 أمثلة من الكود المتولد"):
+                # عرض أمثلة من الكود
+                with st.expander("🔧 أمثلة من التحليلات المتولدة"):
                     lines = spss_code.split('\n')
                     examples = []
                     
+                    keywords = ['FREQUENCIES', 'DESCRIPTIVES', 'GRAPH', 'EXAMINE', 'T-TEST', 
+                              'CORRELATIONS', 'MEANS', 'RECODE', 'VARIABLE LABELS']
+                    
                     for line in lines:
-                        if any(keyword in line for keyword in ['FREQUENCIES', 'DESCRIPTIVES', 'GRAPH', 'EXAMINE', 'T-TEST', 'CORRELATIONS']):
-                            examples.append(line.strip())
-                            if len(examples) >= 8:
+                        if any(keyword in line for keyword in keywords):
+                            if line.strip() and len(line.strip()) > 10:
+                                examples.append(line.strip())
+                            if len(examples) >= 10:
                                 break
                     
                     for example in examples:
@@ -685,6 +686,11 @@ def main():
         
         except Exception as e:
             st.error(f"❌ حدث خطأ: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    
+    elif not data_file and st.session_state.get('generate', False):
+        st.warning("⚠️ يرجى رفع ملف البيانات أولاً")
 
 if __name__ == "__main__":
     main()
