@@ -808,4 +808,8 @@ def main():
                     """)
         
         except Exception as e:
-            st.error(f"❌ حدث خط
+            st.error(f"❌ حدث خطأ: {str(e)}")
+
+# تشغيل التطبيق
+if __name__ == "__main__":
+    main()
