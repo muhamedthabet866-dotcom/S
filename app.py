@@ -4,7 +4,6 @@ import numpy as np
 import os
 import re
 import base64
-from io import StringIO
 
 # إعداد صفحة Streamlit
 st.set_page_config(
@@ -295,19 +294,104 @@ class SPSSStreamlitApp:
         code += "  /NOTOTAL.\n\n"
         
         return code
-    
-    def get_dataframe_info(self, df):
-        """الحصول على معلومات DataFrame بدون استخدام buffer"""
-        info_str = f"DataFrame Shape: {df.shape[0]} rows × {df.shape[1]} columns\n"
-        info_str += f"Columns: {list(df.columns)}\n\n"
-        
-        info_str += "Data Types:\n"
-        for col, dtype in df.dtypes.items():
-            info_str += f"  {col}: {dtype}\n"
-        
-        info_str += f"\nMemory Usage: {df.memory_usage(deep=True).sum() / 1024 ** 2:.2f} MB\n"
-        
-        return info_str
+
+def create_comprehensive_template():
+    """إنشاء قالب SPSS شامل"""
+    template = """* SPSS COMPREHENSIVE MASTER TEMPLATE
+************************************************.
+
+* 1. DATA PREPARATION AND CLEANING
+************************************************.
+* Check for missing values.
+MISSING VALUES ALL ().
+PRINT /TITLE='Missing Values Analysis'.
+DESCRIPTIVES VARIABLES=ALL
+  /STATISTICS=MEAN STDDEV MIN MAX.
+
+* Define variable labels.
+VARIABLE LABELS
+  Var1 'Variable 1 Description'
+  Var2 'Variable 2 Description'
+  Var3 'Variable 3 Description'.
+
+* Define value labels.
+VALUE LABELS
+  Gender 1 'Male' 2 'Female'
+  Education 1 'High School' 2 'Bachelor' 3 'Master' 4 'PhD'.
+
+************************************************.
+* 2. DESCRIPTIVE STATISTICS
+************************************************.
+DESCRIPTIVES VARIABLES=Age Income Score1 Score2
+  /STATISTICS=MEAN STDDEV MIN MAX SEMEAN VARIANCE KURTOSIS SKEWNESS RANGE.
+
+FREQUENCIES VARIABLES=Gender Education Age_Group
+  /ORDER=ANALYSIS
+  /BARCHART FREQ
+  /PIECHART FREQ.
+
+EXAMINE VARIABLES=Income Score1 BY Gender
+  /PLOT=BOXPLOT STEMLEAF HISTOGRAM NPPLOT
+  /COMPARE GROUP
+  /STATISTICS DESCRIPTIVES EXTREME
+  /CINTERVAL 95
+  /MISSING LISTWISE
+  /NOTOTAL.
+
+************************************************.
+* 3. INFERENTIAL STATISTICS
+************************************************.
+* Independent samples t-test.
+T-TEST GROUPS=Gender(1 2)
+  /MISSING=ANALYSIS
+  /VARIABLES=Income Score1 Score2
+  /CRITERIA=CI(.95).
+
+* One-way ANOVA.
+ONEWAY Score1 BY Education(1, 4)
+  /STATISTICS DESCRIPTIVES HOMOGENEITY
+  /MISSING ANALYSIS
+  /POSTHOC=TUKEY LSD ALPHA(0.05).
+
+************************************************.
+* 4. CORRELATION AND REGRESSION
+************************************************.
+CORRELATIONS
+  /VARIABLES=Income Age Score1 Score2
+  /PRINT=TWOTAIL NOSIG
+  /MISSING=PAIRWISE.
+
+REGRESSION
+  /MISSING LISTWISE
+  /STATISTICS COEFF OUTS R ANOVA
+  /CRITERIA=PIN(.05) POUT(.10)
+  /NOORIGIN
+  /DEPENDENT Score1
+  /METHOD=ENTER Income Age Education.
+
+************************************************.
+* 5. DATA MANAGEMENT
+************************************************.
+* Compute new variables.
+COMPUTE BMI = Weight / ((Height/100) ** 2).
+VARIABLE LABELS BMI 'Body Mass Index'.
+
+* Recode variables.
+RECODE Age (Lowest thru 30=1) (31 thru 45=2) (46 thru 60=3) (61 thru Highest=4)
+  INTO Age_Group.
+VARIABLE LABELS Age_Group 'Age Groups'.
+
+* Save the data.
+SAVE OUTFILE='C:\\Data\\Analysis_Data.sav'
+  /COMPRESSED.
+
+************************************************.
+* END OF TEMPLATE
+************************************************.
+* Remember to replace variable names with your actual variable names.
+* Save this syntax file with .sps extension.
+"""
+    return template
 
 # إنشاء تطبيق Streamlit
 def main():
@@ -682,18 +766,15 @@ def main():
         
         # عرض القوالب
         template_options = {
-            "الإحصاءات الوصفية": """
-* Descriptive Statistics Template
+            "الإحصاءات الوصفية": """* Descriptive Statistics Template
 DESCRIPTIVES VARIABLES=ALL
   /STATISTICS=MEAN STDDEV MIN MAX SEMEAN VARIANCE KURTOSIS SKEWNESS RANGE.
 
 FREQUENCIES VARIABLES=ALL
   /FORMAT=NOTABLE
-  /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MINIMUM MAXIMUM.
-            """,
+  /STATISTICS=MEAN MEDIAN MODE STDDEV VARIANCE RANGE MINIMUM MAXIMUM.""",
             
-            "الرسوم البيانية": """
-* Charts and Graphs Template
+            "الرسوم البيانية": """* Charts and Graphs Template
 GRAPH
   /BAR(SIMPLE)=MEAN(Var1) BY CategoryVar
   /TITLE='Bar Chart'.
@@ -704,11 +785,9 @@ GRAPH
 
 GRAPH
   /SCATTERPLOT(BIVAR)=Var1 WITH Var2
-  /TITLE='Scatter Plot'.
-            """,
+  /TITLE='Scatter Plot'.""",
             
-            "اختبارات الفرضيات": """
-* Hypothesis Testing Template
+            "اختبارات الفرضيات": """* Hypothesis Testing Template
 * Independent t-test
 T-TEST GROUPS=GroupVar(1 2)
   /MISSING=ANALYSIS
@@ -719,11 +798,9 @@ T-TEST GROUPS=GroupVar(1 2)
 ONEWAY DependentVar BY GroupVar(1, 3)
   /STATISTICS DESCRIPTIVES HOMOGENEITY
   /MISSING ANALYSIS
-  /POSTHOC=TUKEY LSD.
-            """,
+  /POSTHOC=TUKEY LSD.""",
             
-            "الانحدار والارتباط": """
-* Regression and Correlation Template
+            "الانحدار والارتباط": """* Regression and Correlation Template
 * Correlation
 CORRELATIONS
   /VARIABLES=Var1 Var2 Var3
@@ -737,8 +814,7 @@ REGRESSION
   /CRITERIA=PIN(.05) POUT(.10)
   /NOORIGIN
   /DEPENDENT DependentVar
-  /METHOD=ENTER IndependentVar1 IndependentVar2.
-            """
+  /METHOD=ENTER IndependentVar1 IndependentVar2."""
         }
         
         selected_template = st.selectbox(
@@ -776,76 +852,4 @@ REGRESSION
     # تذييل الصفحة
     st.markdown("---")
     st.markdown("""
-    <div style='text-align: center; color: #666;' class='arabic-text'>
-        <p>مولد أكواد SPSS التفاعلي | تم التطوير باستخدام Streamlit و Python</p>
-        <p>© 2024 - جميع الحقوق محفوظة</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-def create_comprehensive_template():
-    """إنشاء قالب SPSS شامل"""
-    template = """* SPSS COMPREHENSIVE MASTER TEMPLATE
-************************************************.
-
-* 1. DATA PREPARATION AND CLEANING
-************************************************.
-* Check for missing values.
-MISSING VALUES ALL ().
-PRINT /TITLE='Missing Values Analysis'.
-DESCRIPTIVES VARIABLES=ALL
-  /STATISTICS=MEAN STDDEV MIN MAX.
-
-* Define variable labels.
-VARIABLE LABELS
-  Var1 'Variable 1 Description'
-  Var2 'Variable 2 Description'
-  Var3 'Variable 3 Description'.
-
-* Define value labels.
-VALUE LABELS
-  Gender 1 'Male' 2 'Female'
-  Education 1 'High School' 2 'Bachelor' 3 'Master' 4 'PhD'.
-
-************************************************.
-* 2. DESCRIPTIVE STATISTICS
-************************************************.
-DESCRIPTIVES VARIABLES=Age Income Score1 Score2
-  /STATISTICS=MEAN STDDEV MIN MAX SEMEAN VARIANCE KURTOSIS SKEWNESS RANGE.
-
-FREQUENCIES VARIABLES=Gender Education Age_Group
-  /ORDER=ANALYSIS
-  /BARCHART FREQ
-  /PIECHART FREQ.
-
-EXAMINE VARIABLES=Income Score1 BY Gender
-  /PLOT=BOXPLOT STEMLEAF HISTOGRAM NPPLOT
-  /COMPARE GROUP
-  /STATISTICS DESCRIPTIVES EXTREME
-  /CINTERVAL 95
-  /MISSING LISTWISE
-  /NOTOTAL.
-
-************************************************.
-* 3. INFERENTIAL STATISTICS
-************************************************.
-* Independent samples t-test.
-T-TEST GROUPS=Gender(1 2)
-  /MISSING=ANALYSIS
-  /VARIABLES=Income Score1 Score2
-  /CRITERIA=CI(.95).
-
-* One-way ANOVA.
-ONEWAY Score1 BY Education(1, 4)
-  /STATISTICS DESCRIPTIVES HOMOGENEITY
-  /MISSING ANALYSIS
-  /POSTHOC=TUKEY LSD ALPHA(0.05).
-
-************************************************.
-* 4. CORRELATION AND REGRESSION
-************************************************.
-CORRELATIONS
-  /VARIABLES=Income Age Score1 Score2
-  /PRINT=TWOTAIL NOSIG
-  /MISSING=PAIRWISE.
-
-REGRESSION
+    <div style='text-align
