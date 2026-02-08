@@ -26,18 +26,18 @@ def generate_model_solution(df):
     
     # حساب الإحصائيات الأساسية
     x1_stats = {
-        'mean': df['X1'].mean(),
-        'median': df['X1'].median(),
-        'min': df['X1'].min(),
-        'max': df['X1'].max(),
-        'range': df['X1'].max() - df['X1'].min()
+        'mean': df['X1'].mean() if 'X1' in df.columns else 0,
+        'median': df['X1'].median() if 'X1' in df.columns else 0,
+        'min': df['X1'].min() if 'X1' in df.columns else 0,
+        'max': df['X1'].max() if 'X1' in df.columns else 0,
+        'range': (df['X1'].max() - df['X1'].min()) if 'X1' in df.columns else 0
     }
     
     x2_stats = {
-        'mean': df['X2'].mean(),
-        'median': df['X2'].median(),
-        'min': df['X2'].min(),
-        'max': df['X2'].max()
+        'mean': df['X2'].mean() if 'X2' in df.columns else 0,
+        'median': df['X2'].median() if 'X2' in df.columns else 0,
+        'min': df['X2'].min() if 'X2' in df.columns else 0,
+        'max': df['X2'].max() if 'X2' in df.columns else 0
     }
     
     # توليد كود SPSS النموذجي
@@ -95,7 +95,6 @@ FREQUENCIES VARIABLES=X1_Classes
   /FORMAT=AVALUE 
   /ORDER=ANALYSIS.
 ECHO "COMMENT: This distribution reveals the wealth concentration among the bank clients".
-ECHO "         Most customers ({df['X1'].between(0, 500).sum() if 'X1' in df.columns else 'N/A'}) have balances between 0-500 dollars".
 EXECUTE.
 
 * -------------------------------------------------------------------------.
@@ -278,20 +277,20 @@ OMS /SELECT TABLES /IF COMMANDS=['Explore'] SUBTYPES=['Tests of Normality']
 EXAMINE VARIABLES=X1 /PLOT NPPLOT.
 OMSEND.
 
-ECHO "RULE APPLICATION:";
-ECHO "   1. Check Shapiro-Wilk Significance value from Tests of Normality table";
-ECHO "   2. If Sig. > 0.05: Data is normally distributed → Use Empirical Rule";
-ECHO "   3. If Sig. < 0.05: Data is not normal → Use Chebyshev's Rule";
-ECHO "";
-ECHO "Empirical Rule (Normal Distribution):";
-ECHO "   - 68% within Mean ± 1SD";
-ECHO "   - 95% within Mean ± 2SD"; 
-ECHO "   - 99.7% within Mean ± 3SD";
-ECHO "";
-ECHO "Chebyshev's Rule (Any Distribution):";
-ECHO "   - At least 75% within Mean ± 2SD";
-ECHO "   - At least 89% within Mean ± 3SD";
-ECHO "   - At least 94% within Mean ± 4SD";
+ECHO "RULE APPLICATION:".
+ECHO "   1. Check Shapiro-Wilk Significance value from Tests of Normality table".
+ECHO "   2. If Sig. > 0.05: Data is normally distributed → Use Empirical Rule".
+ECHO "   3. If Sig. < 0.05: Data is not normal → Use Chebyshev's Rule".
+ECHO "".
+ECHO "Empirical Rule (Normal Distribution):".
+ECHO "   - 68% within Mean ± 1SD".
+ECHO "   - 95% within Mean ± 2SD". 
+ECHO "   - 99.7% within Mean ± 3SD".
+ECHO "".
+ECHO "Chebyshev's Rule (Any Distribution):".
+ECHO "   - At least 75% within Mean ± 2SD".
+ECHO "   - At least 89% within Mean ± 3SD".
+ECHO "   - At least 94% within Mean ± 4SD".
 EXECUTE.
 
 * -------------------------------------------------------------------------.
@@ -312,27 +311,27 @@ COMPUTE Outlier = (X1 < Lower_Bound) OR (X1 > Upper_Bound).
 FREQUENCIES VARIABLES=Outlier.
 EXECUTE.
 
-ECHO "OUTLIER ANALYSIS:";
-ECHO "   1. Check the Boxplot for data points outside the whiskers";
-ECHO "   2. Extreme values are marked with asterisks (*) or circles (o)";
-ECHO "   3. IQR Method: Values below Q1-1.5*IQR or above Q3+1.5*IQR are outliers";
-ECHO "   4. Based on the analysis above, {df['X1'].count() if 'X1' in df.columns else 'N/A'} cases were analyzed";
+ECHO "OUTLIER ANALYSIS:".
+ECHO "   1. Check the Boxplot for data points outside the whiskers".
+ECHO "   2. Extreme values are marked with asterisks (*) or circles (o)".
+ECHO "   3. IQR Method: Values below Q1-1.5*IQR or above Q3+1.5*IQR are outliers".
+ECHO "   4. Based on the analysis above, {df['X1'].count() if 'X1' in df.columns else 'N/A'} cases were analyzed".
 EXECUTE.
 
 * -------------------------------------------------------------------------.
 TITLE "SUMMARY AND INTERPRETATION".
 * -------------------------------------------------------------------------.
-ECHO "SUMMARY OF FINDINGS:";
-ECHO "   1. Dataset contains {n_cases} bank customers with 6 variables";
-ECHO "   2. Account balance ranges from ${x1_stats['min']:.0f} to ${x1_stats['max']:.0f}";
-ECHO "   3. Skewness analysis reveals the distribution shape of financial data";
-ECHO "   4. Confidence intervals provide range estimates for population parameters";
-ECHO "   5. Outlier detection helps identify unusual account balances";
-ECHO "";
-ECHO "RECOMMENDATIONS:";
-ECHO "   1. Consider customer segmentation based on balance and transaction patterns";
-ECHO "   2. Monitor outliers for potential fraud or data entry errors";
-ECHO "   3. Use findings for targeted marketing and service improvements";
+ECHO "SUMMARY OF FINDINGS:".
+ECHO "   1. Dataset contains {n_cases} bank customers with 6 variables".
+ECHO "   2. Account balance ranges from ${x1_stats['min']:.0f} to ${x1_stats['max']:.0f}".
+ECHO "   3. Skewness analysis reveals the distribution shape of financial data".
+ECHO "   4. Confidence intervals provide range estimates for population parameters".
+ECHO "   5. Outlier detection helps identify unusual account balances".
+ECHO "".
+ECHO "RECOMMENDATIONS:".
+ECHO "   1. Consider customer segmentation based on balance and transaction patterns".
+ECHO "   2. Monitor outliers for potential fraud or data entry errors".
+ECHO "   3. Use findings for targeted marketing and service improvements".
 EXECUTE.
 
 * Cleanup
@@ -350,6 +349,8 @@ def generate_enhanced_solution(df):
     # حساب الإحصائيات المتقدمة
     if 'X1' in df.columns and 'X4' in df.columns:
         balance_by_card = df.groupby('X4')['X1'].agg(['mean', 'std', 'count'])
+    else:
+        balance_by_card = pd.DataFrame({'mean': [0, 0], 'std': [0, 0], 'count': [0, 0]})
     
     solution = f"""* =========================================================================
 * ENHANCED SPSS MODEL SOLUTION WITH DETAILED INTERPRETATIONS
@@ -379,10 +380,10 @@ FREQUENCIES VARIABLES=MISS_X1 TO MISS_X6
   /FORMAT=NOTABLE.
 EXECUTE.
 
-ECHO "DATA QUALITY REPORT:";
-ECHO "   Total cases: {len(df)}";
-ECHO "   Complete cases: {df.notna().all(axis=1).sum()}";
-ECHO "   Missing values will be handled using pairwise deletion in analyses";
+ECHO "DATA QUALITY REPORT:".
+ECHO "   Total cases: {len(df)}".
+ECHO "   Complete cases: {df.notna().all(axis=1).sum() if not df.empty else 0}".
+ECHO "   Missing values will be handled using pairwise deletion in analyses".
 EXECUTE.
 
 * -------------------------------------------------------------------------
@@ -404,10 +405,10 @@ COMPUTE Classes_X1 = RND(SQRT({len(df)})).
 FORMATS Classes_X1 (F2.0).
 EXECUTE.
 
-ECHO "OPTIMAL CLASS CALCULATION FOR X1:";
-ECHO "   Range: {df['X1'].max() - df['X1'].min() if 'X1' in df.columns else 0:.2f}";
-ECHO "   Square root rule: √{len(df)} ≈ {np.sqrt(len(df)):.1f} classes";
-ECHO "   Sturge's rule: 1 + 3.322*log10({len(df)}) ≈ {1 + 3.322*np.log10(len(df)):.1f} classes";
+ECHO "OPTIMAL CLASS CALCULATION FOR X1:".
+ECHO "   Range: {df['X1'].max() - df['X1'].min() if 'X1' in df.columns else 0:.2f}".
+ECHO "   Square root rule: √{len(df)} ≈ {np.sqrt(len(df)):.1f} classes".
+ECHO "   Sturge's rule: 1 + 3.322*log10({len(df)}) ≈ {1 + 3.322*np.log10(len(df)) if len(df) > 0 else 0:.1f} classes".
 EXECUTE.
 
 * 3. Enhanced recoding with visual bins
@@ -492,10 +493,10 @@ EXECUTE.
 
 * 11. 3D visualization of relationships
 * Note: For advanced visualization, use Chart Builder in SPSS GUI
-ECHO "FOR 3D VISUALIZATION:";
-ECHO "   1. Go to Graphs → Chart Builder";
-ECHO "   2. Choose 3D Bar chart";
-ECHO "   3. Drag X6 to X-axis, X4 to Y-axis, and MEAN(X1) to Z-axis";
+ECHO "FOR 3D VISUALIZATION:".
+ECHO "   1. Go to Graphs → Chart Builder".
+ECHO "   2. Choose 3D Bar chart".
+ECHO "   3. Drag X6 to X-axis, X4 to Y-axis, and MEAN(X1) to Z-axis".
 EXECUTE.
 
 * -------------------------------------------------------------------------
@@ -539,11 +540,11 @@ OMS /SELECT TABLES /IF COMMANDS=['Explore'] SUBTYPES=['Tests of Normality','Desc
 EXAMINE VARIABLES=X1 X2 /PLOT NPPLOT.
 OMSEND.
 
-ECHO "NORMALITY INTERPRETATION GUIDE:";
-ECHO "   Kolmogorov-Smirnov: Good for large samples (>50)";
-ECHO "   Shapiro-Wilk: Good for small to medium samples";
-ECHO "   Q-Q Plot: Visual check - points should follow diagonal line";
-ECHO "   Histogram: Should resemble bell curve for normal distribution";
+ECHO "NORMALITY INTERPRETATION GUIDE:".
+ECHO "   Kolmogorov-Smirnov: Good for large samples (>50)".
+ECHO "   Shapiro-Wilk: Good for small to medium samples".
+ECHO "   Q-Q Plot: Visual check - points should follow diagonal line".
+ECHO "   Histogram: Should resemble bell curve for normal distribution".
 EXECUTE.
 
 * 16. Sophisticated outlier detection
@@ -572,10 +573,10 @@ COMPUTE Outlier_Tukey = (X1 < Lower_Fence) OR (X1 > Upper_Fence).
 FREQUENCIES VARIABLES=Outlier_Tukey.
 EXECUTE.
 
-ECHO "OUTLIER DETECTION SUMMARY:";
-ECHO "   Three methods used: Z-score, Modified Z-score, and Tukey's fences";
-ECHO "   Compare results to identify consistent outliers";
-ECHO "   Consider business context before removing outliers";
+ECHO "OUTLIER DETECTION SUMMARY:".
+ECHO "   Three methods used: Z-score, Modified Z-score, and Tukey's fences".
+ECHO "   Compare results to identify consistent outliers".
+ECHO "   Consider business context before removing outliers".
 EXECUTE.
 
 * -------------------------------------------------------------------------
@@ -634,16 +635,16 @@ SAVE TRANSLATE OUTFILE='Banking_Analysis_Results.xlsx'
   /CELLS=VALUES.
 EXECUTE.
 
-ECHO "ANALYSIS COMPLETE - KEY FINDINGS:";
-ECHO "   1. Dataset successfully analyzed with multiple statistical methods";
-ECHO "   2. Results exported to Excel for further reporting";
-ECHO "   3. All 16 questions addressed with appropriate SPSS syntax";
-ECHO "   4. Additional insights provided for comprehensive understanding";
-ECHO "";
-ECHO "RECOMMENDED NEXT STEPS:";
-ECHO "   1. Review outlier cases for data quality";
-ECHO "   2. Conduct hypothesis testing based on observed patterns";
-ECHO "   3. Create dashboard using exported summary statistics";
+ECHO "ANALYSIS COMPLETE - KEY FINDINGS:".
+ECHO "   1. Dataset successfully analyzed with multiple statistical methods".
+ECHO "   2. Results exported to Excel for further reporting".
+ECHO "   3. All 16 questions addressed with appropriate SPSS syntax".
+ECHO "   4. Additional insights provided for comprehensive understanding".
+ECHO "".
+ECHO "RECOMMENDED NEXT STEPS:".
+ECHO "   1. Review outlier cases for data quality".
+ECHO "   2. Conduct hypothesis testing based on observed patterns".
+ECHO "   3. Create dashboard using exported summary statistics".
 EXECUTE.
 
 DATASET CLOSE ALL.
@@ -681,7 +682,6 @@ def main():
         with st.expander("⚡ خيارات متقدمة"):
             include_comments = st.checkbox("تضمين التعليقات والتفسيرات", value=True)
             add_interpretations = st.checkbox("إضافة تفسيرات النتائج", value=True)
-            export_format = st.selectbox("تنسيق التصدير", ["SPSS Syntax", "PDF Report", "Both"])
         
         generate_btn = st.button(
             "🚀 توليد الحل النموذجي",
@@ -705,7 +705,6 @@ def main():
     - ✅ كود SPSS صالح 100% للتشغيل
     - ✅ تعليقات وتفسيرات لكل مخرج
     - ✅ تحليلات إضافية متقدمة
-    - ✅ تصدير النتائج بتنسيقات متعددة
     """)
     
     if excel_file and generate_btn:
@@ -732,7 +731,8 @@ def main():
                 with col2:
                     st.metric("الحالات", len(df))
                 with col3:
-                    st.metric("البيانات المكتملة", f"{df.notna().mean().mean():.1%}")
+                    complete_cases = df.notna().all(axis=1).sum()
+                    st.metric("البيانات المكتملة", f"{complete_cases}")
             
             # توليد الحل
             with st.spinner("🔄 جاري توليد الحل النموذجي..."):
@@ -761,41 +761,31 @@ def main():
                 - ✅ الحالة: جاهز للتشغيل في SPSS
                 """)
                 
-                # أزرار التحميل
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.download_button(
-                        label="💾 تحميل ملف SPSS (.sps)",
-                        data=spss_code,
-                        file_name="SPSS_Model_Solution.sps",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    # إنشاء تقرير PDF (مبسط)
-                    pdf_content = f"SPSS Model Solution Report\n\n{spss_code[:5000]}..."
-                    st.download_button(
-                        label="📄 تحميل تقرير (PDF)",
-                        data=pdf_content,
-                        file_name="SPSS_Solution_Report.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
+                # زر التحميل
+                st.download_button(
+                    label="💾 تحميل ملف SPSS (.sps)",
+                    data=spss_code,
+                    file_name="SPSS_Model_Solution.sps",
+                    mime="text/plain",
+                    use_container_width=True
+                )
                 
                 # عرض أمثلة من الحل
                 with st.expander("🔍 أمثلة من الحل المتولد"):
-                    examples = spss_code.split('\n')
-                    sample_lines = []
-                    for line in examples:
-                        if any(keyword in line for keyword in ['QUESTION', 'FREQUENCIES', 'GRAPH', 'EXAMINE', 'ECHO']):
-                            sample_lines.append(line[:150])
-                            if len(sample_lines) >= 10:
-                                break
+                    # استخراج أمثلة متنوعة
+                    examples = []
+                    lines = spss_code.split('\n')
                     
-                    for sample in sample_lines:
-                        st.code(sample, language='spss')
+                    for line in lines:
+                        line_stripped = line.strip()
+                        if any(keyword in line_stripped for keyword in ['QUESTION', 'FREQUENCIES', 'GRAPH', 'EXAMINE', 'ECHO', 'RECODE']):
+                            if line_stripped and len(line_stripped) > 10:
+                                examples.append(line_stripped)
+                        if len(examples) >= 15:
+                            break
+                    
+                    for example in examples[:10]:
+                        st.code(example, language='spss')
                 
                 # تعليمات التشغيل
                 with st.expander("📖 كيفية استخدام الحل في SPSS"):
@@ -818,4 +808,4 @@ def main():
                     """)
         
         except Exception as e:
-            st.error(f"❌ حدث خطأ: {str(e)}
+            st.error(f"❌ حدث خط
