@@ -1,0 +1,24 @@
+Keyword,Category,Syntax_Template
+frequency table,Descriptive,FREQUENCIES VARIABLES={var} /FORMAT=AVALUE /STATISTICS=STDDEV VARIANCE MINIMUM MAXIMUM MEAN MEDIAN MODE SKEWNESS /HISTOGRAM.
+bar chart,Graphs,GRAPH /BAR(SIMPLE)=MEAN({var}) BY {group}.
+pie chart,Graphs,GRAPH /PIE=SUM({var}) BY {group}.
+"mean, median, mode",Statistics,DESCRIPTIVES VARIABLES={var} /STATISTICS=MEAN MEDIAN MODE STDDEV RANGE MIN MAX.
+confidence interval,Estimation,EXAMINE VARIABLES={var} /PLOT NONE /STATISTICS DESCRIPTIVES /CINTERVAL 95 99.
+normality,Testing,EXAMINE VARIABLES={var} /PLOT NPPLOT /STATISTICS DESCRIPTIVES.
+significant difference (2 groups),T-Test,T-TEST GROUPS={group}(0 1) /VARIABLES={var}.
+significant difference (>2 groups),ANOVA,ONEWAY {var} BY {group} /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.
+correlation,Relation,CORRELATIONS /VARIABLES={var1} {var2} /PRINT=TWOTAIL NOSIG.
+regression,Modeling,REGRESSION /STATISTICS COEFF OUTS R ANOVA /DEPENDENT {y} /METHOD=ENTER {x_list}.
+Descriptives,Descriptives,DESCRIPTIVES VARIABLES=var /STATISTICS=MEAN STDDEV MIN MAX.
+Z-Scores,Z-Scores,DESCRIPTIVES VARIABLES=var /SAVE.
+Independent T-Test,Independent T-Test,T-TEST GROUPS=group(1 2) /VARIABLES=test_var.
+Paired T-Test,Paired T-Test,T-TEST PAIRS=Before WITH After (PAIRED).
+One-Way ANOVA,One-Way ANOVA,ONEWAY var BY group /STATISTICS DESCRIPTIVES /POSTHOC=TUKEY.
+Normality (K-S),Normality (K-S),NPAR TESTS /K-S(NORMAL)=var.
+Correlation,Correlation,CORRELATIONS /VARIABLES=var1 var2 /PRINT=TWOTAIL.
+Simple Regression,Simple Regression,REGRESSION /DEPENDENT=y /METHOD=ENTER x.
+Multiple Regression,Multiple Regression,REGRESSION /DEPENDENT=y /METHOD=ENTER x1 x2 x3.
+Bar Chart,Bar Chart,GRAPH /BAR(MEAN)=var BY group.
+Pie Chart,Pie Chart,GRAPH /PIE=SUM(var) BY group.
+Histogram,Histogram,GRAPH /HISTOGRAM(NORMAL)=var.
+Recode Data,Recode Data,RECODE var (Low thru 1990=1) (1991 thru Hi=2) INTO newvar.
