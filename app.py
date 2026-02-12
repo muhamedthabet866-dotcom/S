@@ -1,599 +1,232 @@
 import streamlit as st
 import pandas as pd
 import re
-import base64
-from datetime import datetime
-import chardet
+from io import StringIO
+import docx2txt
 
-class PerfectSPSSGenerator:
-    def __init__(self):
-        self.uploaded_files = {}
-        self.generated_codes = {}
-    
-    def detect_encoding(self, file_content):
-        """كشف ترميز الملف"""
-        result = chardet.detect(file_content)
-        return result['encoding'] if result['encoding'] else 'utf-8'
-    
-    def parse_questions(self, text_content):
-        """تحليل الأسئلة بدقة مع دعم أفضل للعربية"""
-        questions = []
+# -----------------------------------------------------------------------------
+# 1. تضمين بيانات ملف القواعد (لضمان عمل الكود حتى لو لم يرفع المستخدم الملف)
+# -----------------------------------------------------------------------------
+DEFAULT_RULES_CSV = """Keyword,Category,Syntax_Template
+frequency,Descriptive,FREQUENCIES VARIABLES={vars} /ORDER=ANALYSIS.
+count,Descriptive,FREQUENCIES VARIABLES={vars} /ORDER=ANALYSIS.
+mean,Descriptive,DESCRIPTIVES VARIABLES={vars} /STATISTICS=MEAN STDDEV MIN MAX.
+average,Descriptive,DESCRIPTIVES VARIABLES={vars} /STATISTICS=MEAN STDDEV MIN MAX.
+median,Descriptive,FREQUENCIES VARIABLES={vars} /FORMAT=NOTABLE /STATISTICS=MEDIAN.
+mode,Descriptive,FREQUENCIES VARIABLES={vars} /FORMAT=NOTABLE /STATISTICS=MODE.
+std dev,Descriptive,DESCRIPTIVES VARIABLES={vars} /STATISTICS=STDDEV.
+variance,Descriptive,DESCRIPTIVES VARIABLES={vars} /STATISTICS=VARIANCE.
+range,Descriptive,DESCRIPTIVES VARIABLES={vars} /STATISTICS=RANGE.
+histogram,Graphs,GRAPH /HISTOGRAM={vars}.
+bar chart,Graphs,GRAPH /BAR(SIMPLE)=MEAN({num_var}) BY {cat_var}.
+pie chart,Graphs,GRAPH /PIE=COUNT BY {cat_var}.
+correlation,Relation,CORRELATIONS /VARIABLES={vars} /PRINT=TWOTAIL NOSIG.
+relationship,Relation,CORRELATIONS /VARIABLES={vars} /PRINT=TWOTAIL NOSIG.
+regression,Modeling,REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /CRITERIA=PIN(.05) POUT(.10) /NOORIGIN /DEPENDENT {dep_var} /METHOD=ENTER {indep_vars}.
+predict,Modeling,REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /CRITERIA=PIN(.05) POUT(.10) /NOORIGIN /DEPENDENT {dep_var} /METHOD=ENTER {indep_vars}.
+impact,Modeling,REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /CRITERIA=PIN(.05) POUT(.10) /NOORIGIN /DEPENDENT {dep_var} /METHOD=ENTER {indep_vars}.
+effect,Modeling,REGRESSION /MISSING LISTWISE /STATISTICS COEFF OUTS R ANOVA /CRITERIA=PIN(.05) POUT(.10) /NOORIGIN /DEPENDENT {dep_var} /METHOD=ENTER {indep_vars}.
+t-test,T-Test,T-TEST GROUPS={cat_var}(1 2) /MISSING=ANALYSIS /VARIABLES={num_var} /CRITERIA=CI(.95).
+difference between two,T-Test,T-TEST GROUPS={cat_var}(1 2) /MISSING=ANALYSIS /VARIABLES={num_var} /CRITERIA=CI(.95).
+anova,ANOVA,ONEWAY {num_var} BY {cat_var} /STATISTICS DESCRIPTIVES /MISSING ANALYSIS /POSTHOC=TUKEY ALPHA(0.05).
+difference among,ANOVA,ONEWAY {num_var} BY {cat_var} /STATISTICS DESCRIPTIVES /MISSING ANALYSIS /POSTHOC=TUKEY ALPHA(0.05).
+normality,Testing,EXAMINE VARIABLES={vars} /PLOT BOXPLOT STEMLEAF NPPLOT /COMPARE GROUPS /STATISTICS DESCRIPTIVES /CINTERVAL 95 /MISSING LISTWISE /NOTOTAL.
+test normal,Testing,EXAMINE VARIABLES={vars} /PLOT BOXPLOT STEMLEAF NPPLOT /COMPARE GROUPS /STATISTICS DESCRIPTIVES /CINTERVAL 95 /MISSING LISTWISE /NOTOTAL.
+"""
+
+# -----------------------------------------------------------------------------
+# 2. فئة المعالجة الذكية (Smart Engine)
+# -----------------------------------------------------------------------------
+class SmartSPSSGenerator:
+    def __init__(self, rules_df, data_df):
+        self.rules = rules_df
+        self.df = data_df
+        self.columns = list(data_df.columns) if data_df is not None else []
         
-        # محاولة فك الترميز إذا كان bytes
-        if isinstance(text_content, bytes):
-            encoding = self.detect_encoding(text_content)
-            try:
-                text_content = text_content.decode(encoding)
-            except:
-                text_content = text_content.decode('utf-8', errors='ignore')
+        # تصنيف الأعمدة تلقائياً (رقمية vs نصية/فئوية)
+        self.num_cols = []
+        self.cat_cols = []
+        if self.df is not None:
+            for col in self.df.columns:
+                if pd.api.types.is_numeric_dtype(self.df[col]) and self.df[col].nunique() > 10:
+                    self.num_cols.append(col)
+                else:
+                    self.cat_cols.append(col)
+
+    def find_mentioned_variables(self, text):
+        """البحث عن المتغيرات الموجودة في النص ومطابقتها مع أعمدة الإكسل"""
+        found = []
+        text_lower = text.lower()
         
-        lines = text_content.split('\n')
-        current_q = ""
-        question_patterns = [
-            r'^\d+[\.\)]',  # 1. or 1)
-            r'^\d+\.\s+',   # 1. 
-            r'^سؤال\s*\d+', # سؤال 1
-            r'^Question\s*\d+', # Question 1
-        ]
+        # ترتيب الأعمدة حسب الطول (الأطول أولاً) لتجنب التطابق الجزئي الخاطئ
+        sorted_cols = sorted(self.columns, key=len, reverse=True)
         
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # البحث عن بداية سؤال جديد
-            is_new_question = any(re.match(pattern, line, re.IGNORECASE) for pattern in question_patterns)
+        for col in sorted_cols:
+            # البحث عن اسم العمود ككلمة كاملة
+            pattern = r'\b' + re.escape(str(col).lower()) + r'\b'
+            if re.search(pattern, text_lower):
+                found.append(col)
+        
+        return found
+
+    def get_best_rule(self, text):
+        """تحديد القاعدة المناسبة بناءً على الكلمات المفتاحية"""
+        text_lower = text.lower()
+        best_rule = None
+        max_score = 0
+        
+        for idx, row in self.rules.iterrows():
+            keyword = str(row['Keyword']).lower()
+            if keyword in text_lower:
+                # نعطي أولوية للكلمة الأطول (مثلاً "independent t-test" أفضل من "t-test")
+                score = len(keyword)
+                if score > max_score:
+                    max_score = score
+                    best_rule = row
+        
+        return best_rule
+
+    def fill_template(self, template, found_vars):
+        """تعبئة القالب بالمتغيرات المكتشفة بذكاء"""
+        syntax = template
+        
+        # تصنيف المتغيرات المكتشفة
+        found_num = [v for v in found_vars if v in self.num_cols]
+        found_cat = [v for v in found_vars if v in self.cat_cols]
+        
+        # إذا لم نجد تصنيفاً دقيقاً، نعتبر الكل رقمي افتراضياً
+        if not found_num and not found_cat:
+            found_num = found_vars
+        
+        # 1. تعويض {vars} - قائمة عامة
+        if "{vars}" in syntax:
+            vars_str = " ".join(found_vars) if found_vars else "ALL_VARS"
+            syntax = syntax.replace("{vars}", vars_str)
             
-            if is_new_question:
-                if current_q:
-                    questions.append(current_q.strip())
-                current_q = line
-            elif current_q and not line.startswith('*'):
-                current_q += " " + line
-        
-        if current_q:
-            questions.append(current_q.strip())
-        
-        # تنظيف الأسئلة
-        cleaned_questions = []
-        for q in questions:
-            # إزالة أرقام الصفحات والتنسيقات غير المرغوبة
-            q = re.sub(r'صفحة\s*\d+', '', q, flags=re.IGNORECASE)
-            q = re.sub(r'Page\s*\d+', '', q, flags=re.IGNORECASE)
-            q = re.sub(r'\s+', ' ', q).strip()
-            if len(q) > 10:  # تجاهل الأسئلة القصيرة جداً
-                cleaned_questions.append(q)
-        
-        return cleaned_questions
-    
-    def validate_dataframe(self, df):
-        """التحقق من وجود الأعمدة المطلوبة"""
-        required_vars = ['X1', 'X2', 'X3', 'X4', 'X5', 'X6']
-        missing_vars = []
-        
-        # محاولة إعادة تسمية الأعمدة إذا كانت بأسماء مختلفة
-        column_mapping = {}
-        for col in df.columns:
-            col_upper = str(col).upper()
-            for req_var in required_vars:
-                if req_var in col_upper or col_upper in req_var:
-                    column_mapping[col] = req_var
-        
-        if column_mapping:
-            df = df.rename(columns=column_mapping)
-            st.info(f"✅ تم تعيين الأعمدة: {column_mapping}")
-        
-        # التحقق من المتغيرات المطلوبة
-        for var in required_vars:
-            if var not in df.columns:
-                missing_vars.append(var)
-        
-        return df, missing_vars
-    
-    def generate_dataset1_code(self, questions, df):
-        """توليد كود مطابق للنموذج تماماً"""
-        df, missing_vars = self.validate_dataframe(df)
-        
-        code = f"""* Encoding: UTF-8.
-* Generated by SPSS Perfect Generator on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.
+        # 2. تعويض {num_var} - متغير رقمي (مثل الراتب، العمر)
+        if "{num_var}" in syntax:
+            val = found_num[0] if found_num else (found_vars[0] if found_vars else "NUM_VAR")
+            syntax = syntax.replace("{num_var}", val)
 
-* [PRE-ANALYSIS SETUP] Defining Variable Labels and Values.
-VARIABLE LABELS 
-    X1 "Account Balance ($)" 
-    X2 "ATM Transactions" 
-    X3 "Other Services" 
-    X4 "Debit Card Holder" 
-    X5 "Interest Received" 
-    X6 "City Location".
+        # 3. تعويض {cat_var} - متغير فئوي/تجميعي (مثل الجنس، المدينة)
+        if "{cat_var}" in syntax:
+            val = found_cat[0] if found_cat else (found_vars[-1] if found_vars else "GROUP_VAR")
+            syntax = syntax.replace("{cat_var}", val)
+            
+        # 4. تعويض {dep_var} و {indep_vars} للانحدار
+        if "{dep_var}" in syntax:
+            # افتراض: المتغير الأول هو التابع، والباقي مستقل
+            dep = found_vars[0] if found_vars else "Y"
+            indep = " ".join(found_vars[1:]) if len(found_vars) > 1 else "X"
+            syntax = syntax.replace("{dep_var}", dep).replace("{indep_vars}", indep)
+            
+        return syntax
 
-VALUE LABELS 
-    X4 0 "No" 1 "Yes" 
-    /X5 0 "No" 1 "Yes" 
-    /X6 1 "City 1" 2 "City 2" 3 "City 3" 4 "City 4".
+    def generate_syntax(self, question_text, q_num):
+        """توليد الكود لسؤال واحد"""
+        # 1. استخراج المتغيرات
+        found_vars = self.find_mentioned_variables(question_text)
+        
+        # 2. تحديد القاعدة
+        rule = self.get_best_rule(question_text)
+        
+        header = f"* --------------------------------------------------.\n* Q{q_num}: {question_text[:60]}...\n"
+        
+        if not rule is None:
+            # 3. تعبئة القالب
+            template = rule['Syntax_Template']
+            
+            # تنظيف القالب من أسماء المتغيرات القديمة إذا كانت موجودة في ملف القواعد
+            # (نستبدل var, var1, group بـ {vars} و {cat_var} لتوحيد المعالجة)
+            template = template.replace("{var}", "{vars}").replace("{group}", "{cat_var}")
+            template = template.replace("{var1}", "{vars}").replace("{var2}", "") # Correlation usually takes list
+            template = template.replace("{y}", "{dep_var}").replace("{x}", "{indep_vars}")
+            template = template.replace("{x_list}", "{indep_vars}")
 
-"""
-        
-        # تحذير للمتغيرات المفقودة
-        if missing_vars:
-            code += f"""* WARNING: The following variables were not found in the dataset: {', '.join(missing_vars)}.
-* Please adjust variable names according to your actual data structure.
-
-"""
-        
-        # معالجة كل سؤال حسب النموذج
-        max_questions = min(len(questions), 16)
-        for i, question in enumerate(questions[:max_questions], 1):
-            code += self._generate_question_template(i, question, df)
-        
-        return code
-    
-    def _generate_question_template(self, q_num, question, df):
-        """توليد كود لكل سؤال مطابق للنموذج"""
-        # تنظيف السؤال للعرض
-        clean_question = re.sub(r'[\n\r\t]+', ' ', question)
-        clean_question = clean_question[:80] + ('...' if len(clean_question) > 80 else '')
-        
-        code = f"""* -------------------------------------------------------------------------.
-TITLE "QUESTION {q_num}: {clean_question}".
-* -------------------------------------------------------------------------.
-"""
-        
-        # معالجة كل سؤال حسب رقمه مع تحسينات
-        if q_num == 1:
-            code += """FREQUENCIES VARIABLES=X4 X5 X6
-  /ORDER=ANALYSIS
-  /STATISTICS=ALL.
-
-"""
-        
-        elif q_num == 2:
-            # التحقق من وجود X1
-            if 'X1' in df.columns:
-                max_val = df['X1'].max() if not df['X1'].empty else 5000
-                code += f"""RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) (1000.01 thru 1500=3) 
-  (1500.01 thru 2000=4) (2000.01 thru HI=5) INTO X1_Classes.
-VALUE LABELS X1_Classes 
-  1 "0-500" 
-  2 "501-1000" 
-  3 "1001-1500" 
-  4 "1501-2000" 
-  5 "Over 2000".
-FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.
-ECHO "COMMENT: This distribution reveals the wealth concentration among the bank clients".
-
-"""
-            else:
-                code += """* Variable X1 not found in dataset. Please adjust variable name.
-FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.
-
-"""
-        
-        elif q_num == 3:
-            code += """* K-rule: 2^k >= N. For N=60, 2^6=64, so 6 classes are optimal.
-RECODE X2 (2 thru 5=1) (6 thru 9=2) (10 thru 13=3) (14 thru 17=4) 
-  (18 thru 21=5) (22 thru 25=6) INTO X2_Krule.
-VALUE LABELS X2_Krule 
-  1 "2-5" 
-  2 "6-9" 
-  3 "10-13" 
-  4 "14-17" 
-  5 "18-21" 
-  6 "22-25".
-FREQUENCIES VARIABLES=X2_Krule.
-ECHO "COMMENT: Based on the K-rule, 6 classes provide a clear view of transaction intensity".
-
-"""
-        
-        elif q_num == 4:
-            code += """FREQUENCIES VARIABLES=X1 X2 
-  /FORMAT=NOTABLE 
-  /STATISTICS=MEAN MEDIAN MODE MINIMUM MAXIMUM RANGE VARIANCE STDDEV SKEWNESS SESKEW
-  /HISTOGRAM NORMAL.
-
-"""
-        
-        elif q_num == 5:
-            code += """* Histograms for continuous variables.
-GRAPH /HISTOGRAM(NORMAL)=X1 
-  /TITLE="Histogram of Account Balance with Normal Curve".
-GRAPH /HISTOGRAM(NORMAL)=X2 
-  /TITLE="Histogram of ATM Transactions with Normal Curve".
-
-"""
-        
-        elif q_num == 6:
-            code += """* Skewness interpretation.
-DESCRIPTIVES VARIABLES=X1 X2
-  /STATISTICS=MEAN MEDIAN SKEWNESS.
-ECHO "ANALYSIS: If Mean > Median, distribution is Right-Skewed (Positive Skewness).".
-ECHO "If Mean < Median, distribution is Left-Skewed (Negative Skewness).".
-ECHO "Skewness between -0.5 and 0.5 indicates approximately symmetric distribution.".
-
-"""
-        
-        elif q_num == 7:
-            code += """* Descriptive statistics by City.
-SORT CASES BY X6.
-SPLIT FILE SEPARATE BY X6.
-FREQUENCIES VARIABLES=X1 X2 
-  /FORMAT=NOTABLE 
-  /STATISTICS=MEAN MEDIAN MODE MIN MAX RANGE VAR STDDEV SKEW.
-SPLIT FILE OFF.
-
-"""
-        
-        elif q_num == 8:
-            code += """* Descriptive statistics by Debit Card status.
-SORT CASES BY X4.
-SPLIT FILE SEPARATE BY X4.
-FREQUENCIES VARIABLES=X1 X2 
-  /FORMAT=NOTABLE 
-  /STATISTICS=MEAN MEDIAN MODE MIN MAX RANGE VAR STDDEV SKEW.
-SPLIT FILE OFF.
-
-"""
-        
-        elif q_num == 9:
-            code += """* Bar chart of average balance by city.
-GRAPH /BAR(SIMPLE)=MEAN(X1) BY X6
-  /TITLE="Average Account Balance by City"
-  /FOOTNOTE="Higher average balances indicate wealthier locations".
-
-"""
-        
-        elif q_num == 10:
-            code += """* Bar chart of maximum ATM transactions by debit card status.
-GRAPH /BAR(SIMPLE)=MAX(X2) BY X4
-  /TITLE="Maximum ATM Transactions by Debit Card Status"
-  /FOOTNOTE="Debit card holders show higher transaction capacity".
-
-"""
-        
-        elif q_num == 11:
-            code += """* Grouped bar chart for interaction analysis.
-GRAPH /BAR(GROUPED)=MEAN(X1) BY X6 BY X4
-  /TITLE="Average Balance by City and Debit Card Status"
-  /FOOTNOTE="Interaction between location and card ownership".
-
-"""
-        
-        elif q_num == 12:
-            code += """* Percentage bar chart for interest recipients.
-GRAPH /BAR(SIMPLE)=PCT BY X5
-  /TITLE="Percentage of Interest Receivers vs Non-Receivers"
-  /FOOTNOTE="Shows market penetration of interest-bearing accounts".
-
-"""
-        
-        elif q_num == 13:
-            code += """* Pie chart for market share visualization.
-GRAPH /PIE=PCT BY X5
-  /TITLE="Market Share: Customers Receiving Interest (%)"
-  /FOOTNOTE="Proportion of customers who receive interest payments".
-
-"""
-        
-        elif q_num == 14:
-            code += """* Confidence intervals for mean account balance.
-EXAMINE VARIABLES=X1 
-  /STATISTICS DESCRIPTIVES 
-  /CINTERVAL 95 
-  /PLOT NONE.
-EXAMINE VARIABLES=X1 
-  /STATISTICS DESCRIPTIVES 
-  /CINTERVAL 99 
-  /PLOT NONE.
-ECHO "INTERPRETATION: Wider 99% CI provides more confidence but less precision".
-
-"""
-        
-        elif q_num == 15:
-            code += """* Normality test and rule application.
-EXAMINE VARIABLES=X1 
-  /PLOT NPPLOT 
-  /STATISTICS DESCRIPTIVES
-  /MISSING LISTWISE.
-ECHO "RULE: If Shapiro-Wilk Sig > 0.05, distribution is normal - apply Empirical Rule.".
-ECHO "If Sig < 0.05, distribution is non-normal - use Chebyshev's Theorem.".
-
-"""
-        
-        elif q_num == 16:
-            code += """* Boxplot for outlier detection.
-EXAMINE VARIABLES=X1 
-  /PLOT BOXPLOT 
-  /STATISTICS DESCRIPTIVES
-  /MISSING LISTWISE.
-ECHO "ANALYSIS: Points outside whiskers (1.5*IQR) are potential outliers.".
-ECHO "Extreme outliers (3*IQR) are marked with asterisks (*).".
-
-"""
-        
+            code = self.fill_template(template, found_vars)
+            
+            # التحقق من وجود متغيرات
+            if not found_vars:
+                 header += f"* WARNING: No variables matched from Excel columns! Check spelling.\n"
+            
+            return header + code + "\n"
         else:
-            code += f"* Analysis for question {q_num}: {clean_question}\n"
-            code += "* Add custom SPSS syntax here.\n\n"
-        
-        return code
-    
-    def create_download_link(self, content, filename):
-        """إنشاء رابط تحميل مع دعم العربية"""
-        try:
-            b64 = base64.b64encode(content.encode('utf-8')).decode()
-            return f'<a href="data:file/txt;base64,{b64}" download="{filename}" style="text-decoration:none;">📥 تحميل {filename}</a>'
-        except:
-            return f'⚠️ خطأ في إنشاء رابط التحميل'
+            return header + "* ANALYSIS NOT RECOGNIZED. Please check keywords in rules file.\n"
 
+# -----------------------------------------------------------------------------
+# 3. واجهة التطبيق
+# -----------------------------------------------------------------------------
 def main():
-    st.set_page_config(
-        page_title="SPSS Syntax Generator - Professional Edition",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Custom CSS for better appearance
+    st.set_page_config(page_title="SPSS Smart Solver", layout="wide")
+    st.title("🧠 المحلل الإحصائي الذكي (Smart SPSS Solver)")
     st.markdown("""
-    <style>
-    .main-header {
-        background: linear-gradient(90deg, #4e73df 0%, #224abe 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        margin-bottom: 20px;
-    }
-    .stButton > button {
-        background-color: #4e73df;
-        color: white;
-        font-weight: bold;
-        border: none;
-        padding: 10px 24px;
-        border-radius: 5px;
-        transition: all 0.3s;
-    }
-    .stButton > button:hover {
-        background-color: #224abe;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    st.markdown('<div class="main-header"><h1>📊 مولد أكواد SPSS الاحترافي</h1><p>يولد أكواد SPSS مطابقة تماماً للنماذج الأكاديمية مع دعم كامل للغة العربية</p></div>', unsafe_allow_html=True)
-    
-    generator = PerfectSPSSGenerator()
-    
-    # Sidebar with instructions
-    with st.sidebar:
-        st.header("📌 تعليمات الاستخدام")
-        st.markdown("""
-        1. **رفع ملف Excel**: يحتوي على البيانات (X1, X2, ...)
-        2. **رفع ملف الأسئلة**: نص يحتوي على الأسئلة المرقمة
-        3. **توليد الكود**: ضغط الزر للحصول على كود SPSS
-        4. **تحميل الملف**: حفظ الكود كملف .sps
-        
-        **المتغيرات المطلوبة:**
-        - X1: رصيد الحساب
-        - X2: معاملات الصراف الآلي
-        - X3: خدمات أخرى
-        - X4: حامل بطاقة الخصم
-        - X5: استلام الفوائد
-        - X6: الموقع
-        """)
-        
-        st.info("📊 **الإصدار**: 2.0.0 | **آخر تحديث**: فبراير 2025")
-    
-    # Main content area
+    هذا التطبيق يفهم سياق الأسئلة ويقوم بربطها بمتغيرات ملف الإكسل تلقائياً.
+    1. يقرأ القواعد الإحصائية.
+    2. يبحث عن أسماء الأعمدة (مثل `Income`, `Age`) داخل نص السؤال.
+    3. يولد كود SPSS الصحيح بالمتغيرات الصحيحة.
+    """)
+
+    # إعداد ملف القواعد
+    try:
+        rules_df = pd.read_csv("spss_rules.csv")
+    except:
+        # استخدام القواعد الافتراضية إذا لم يوجد الملف
+        rules_df = pd.read_csv(StringIO(DEFAULT_RULES_CSV))
+
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📁 رفع ملف البيانات")
-        excel_file = st.file_uploader(
-            "اختر ملف Excel",
-            type=['xls', 'xlsx', 'xlsm'],
-            help="يدعم ملفات Excel بصيغ xls, xlsx, xlsm"
-        )
-        
-        if excel_file:
-            st.success(f"✅ تم رفع: {excel_file.name}")
+        st.subheader("1. ملف البيانات (Excel)")
+        data_file = st.file_uploader("ارفع ملف الإكسل الذي يحتوي على البيانات", type=['xlsx', 'xls'])
     
     with col2:
-        st.subheader("📝 رفع ملف الأسئلة")
-        questions_file = st.file_uploader(
-            "اختر ملف الأسئلة",
-            type=['txt', 'doc', 'docx', 'rtf'],
-            help="يدعم النصوص العربية والإنجليزية"
-        )
-        
-        if questions_file:
-            st.success(f"✅ تم رفع: {questions_file.name}")
-    
-    # Process files
-    if excel_file and questions_file:
+        st.subheader("2. ملف الأسئلة (Word/Txt)")
+        q_file = st.file_uploader("ارفع ملف الأسئلة", type=['docx', 'txt'])
+
+    if data_file and q_file:
         try:
-            # قراءة البيانات مع دعم أفضل للصيغ
-            try:
-                df = pd.read_excel(excel_file, engine='openpyxl')
-            except:
-                df = pd.read_excel(excel_file)
+            # قراءة البيانات
+            df = pd.read_excel(data_file)
+            st.success(f"✅ تم تحميل البيانات. الأعمدة المكتشفة: {list(df.columns)}")
             
-            # قراءة الأسئلة مع دعم الترميزات المختلفة
-            questions_content = questions_file.getvalue()
+            # قراءة الأسئلة
+            if q_file.name.endswith('.docx'):
+                text = docx2txt.process(q_file)
+            else:
+                text = q_file.getvalue().decode("utf-8")
             
-            # محاولة فك الترميز
-            try:
-                questions_text = questions_content.decode('utf-8')
-            except:
-                try:
-                    questions_text = questions_content.decode('cp1256')  # Arabic Windows
-                except:
-                    questions_text = questions_content.decode('latin-1', errors='ignore')
+            # تقسيم الأسئلة
+            questions = [q.strip() for q in re.split(r'\n(?=\d+[\.\)]|Q\d+)', text) if q.strip()]
             
-            questions = generator.parse_questions(questions_text)
+            # المعالجة
+            engine = SmartSPSSGenerator(rules_df, df)
             
-            if not questions:
-                st.warning("⚠️ لم يتم العثور على أسئلة. يرجى التأكد من تنسيق الملف.")
-                return
-            
-            # عرض معلومات الأسئلة
-            col_stats1, col_stats2, col_stats3 = st.columns(3)
-            with col_stats1:
-                st.metric("عدد الأسئلة المكتشفة", len(questions))
-            with col_stats2:
-                st.metric("الأسئلة المعالجة", min(len(questions), 16))
-            with col_stats3:
-                st.metric("متغيرات البيانات", len(df.columns))
-            
-            # عرض عينة من الأسئلة
-            with st.expander("📋 عرض الأسئلة المحللة", expanded=False):
-                for i, q in enumerate(questions[:8], 1):
-                    st.write(f"**{i}.** {q[:100]}..." if len(q) > 100 else f"**{i}.** {q}")
-                if len(questions) > 8:
-                    st.write(f"... و{len(questions)-8} أسئلة أخرى")
-            
-            # Preview data
-            with st.expander("🔍 معاينة البيانات", expanded=False):
-                st.dataframe(df.head(10), use_container_width=True)
-                
-                # Show data types
-                col_types = pd.DataFrame({
-                    'Column': df.columns,
-                    'Type': df.dtypes.astype(str),
-                    'Non-Null': df.count().values,
-                    'Unique': [df[col].nunique() for col in df.columns]
-                })
-                st.dataframe(col_types, use_container_width=True)
-            
-            # Generate button
-            col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
-            with col_btn2:
-                generate_button = st.button(
-                    "🔄 توليد كود SPSS متقدم",
-                    type="primary",
-                    use_container_width=True
-                )
-            
-            if generate_button:
-                with st.spinner("⚙️ جاري توليد كود SPSS المتقدم..."):
-                    spss_code = generator.generate_dataset1_code(questions, df)
-                    
-                    # Display code
-                    st.subheader("📋 كود SPSS المتقدم")
-                    
-                    # Tabs for different views
-                    tab1, tab2, tab3 = st.tabs(["الكود الكامل", "معاينة مختصرة", "معلومات الكود"])
-                    
-                    with tab1:
-                        st.code(spss_code, language='spss', line_numbers=True)
-                    
-                    with tab2:
-                        preview_lines = spss_code.split('\n')[:50]
-                        st.code('\n'.join(preview_lines) + "\n... (يتبع)", language='spss')
-                    
-                    with tab3:
-                        col_info1, col_info2 = st.columns(2)
-                        with col_info1:
-                            st.markdown("""
-                            **مكونات الكود:**
-                            - ✅ تعريف المتغيرات
-                            - ✅ ترميز الفئات
-                            - ✅ إحصائيات وصفية
-                            - ✅ رسوم بيانية
-                            - ✅ اختبارات طبيعية
-                            - ✅ كشف القيم الشاذة
-                            """)
-                        
-                        with col_info2:
-                            st.markdown("""
-                            **المميزات:**
-                            - 📊 16 سؤال أكاديمي
-                            - 💬 تعليقات تفسيرية
-                            - 🔍 تحليل متقدم
-                            - 🎯 توافق مع SPSS v25+
-                            """)
-                    
-                    # Download button
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                    with col_dl2:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"SPSS_Analysis_{timestamp}.sps"
-                        st.markdown(
-                            generator.create_download_link(spss_code, filename),
-                            unsafe_allow_html=True
-                        )
-                    
-                    # Export options
-                    with st.expander("📤 خيارات التصدير الإضافية"):
-                        export_format = st.radio(
-                            "اختر صيغة التصدير:",
-                            ["SPSS Syntax (.sps)", "Plain Text (.txt)", "Documentation (.md)"],
-                            horizontal=True
-                        )
-                        
-                        if export_format == "SPSS Syntax (.sps)":
-                            export_code = spss_code
-                            export_name = f"SPSS_Analysis_{timestamp}.sps"
-                        elif export_format == "Plain Text (.txt)":
-                            export_code = spss_code
-                            export_name = f"SPSS_Analysis_{timestamp}.txt"
-                        else:
-                            export_code = f"""# SPSS Analysis Documentation
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Questions: {len(questions)}
+            full_syntax = """* Encoding: UTF-8.
+* Smart SPSS Syntax Generator.
+* Generated based on uploaded Excel variables and Questions.
 
-## Code Summary
-{spss_code[:1000]}...
-
-## Variables Used
-- X1: Account Balance
-- X2: ATM Transactions
-- X3: Other Services
-- X4: Debit Card Holder
-- X5: Interest Received
-- X6: City Location
 """
-                            export_name = f"SPSS_Documentation_{timestamp}.md"
-                        
-                        st.markdown(
-                            generator.create_download_link(export_code, export_name),
-                            unsafe_allow_html=True
-                        )
-        
-        except Exception as e:
-            st.error(f"❌ حدث خطأ: {str(e)}")
-            st.exception(e)  # Show detailed error for debugging
-    
-    else:
-        # Welcome interface
-        st.info("""
-        ### 👋 مرحباً بك في مولد أكواد SPSS
-        
-        **للبدء، يرجى اتباع الخطوات التالية:**
-        1. ارفع ملف Excel الذي يحتوي على بياناتك
-        2. ارفع ملف نصي يحتوي على أسئلة البحث
-        3. اضغط على زر التوليد لإنشاء كود SPSS
-        
-        **مميزات النظام:**
-        - ✨ توليد أكواد جاهزة للتشغيل مباشرة
-        - 📊 دعم كامل للتحليل الإحصائي
-        - 🔧 توافق مع جميع إصدارات SPSS
-        - 🌐 دعم اللغة العربية
-        """)
-        
-        # Show sample
-        with st.expander("🎯 عرض نموذج للكود المولد"):
-            st.code("""* مثال على كود SPSS الذي سيتم توليده:
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 1: التوزيع التكراري للمتغيرات الفئوية".
-* -------------------------------------------------------------------------.
-FREQUENCIES VARIABLES=X4 X5 X6 /ORDER=ANALYSIS.
-ECHO "INTERPRETATION: هذا الجدول يوضح توزيع ..."
+            # تعريف المتغيرات (اختياري)
+            full_syntax += "VARIABLE LABELS " + " ".join([f'{col} "{col}"' for col in df.columns]) + ".\n\n"
 
-* -------------------------------------------------------------------------.
-TITLE "QUESTION 2: توزيع رصيد الحساب".
-* -------------------------------------------------------------------------.
-RECODE X1 (0 thru 500=1) (500.01 thru 1000=2) ... INTO X1_Classes.
-FREQUENCIES VARIABLES=X1_Classes /FORMAT=AVALUE.
-""", language='spss')
+            for i, q in enumerate(questions, 1):
+                # تنظيف نص السؤال من الأرقام في البداية
+                clean_q = re.sub(r'^(\d+[\.\)]|Q\d+)\s*', '', q)
+                full_syntax += engine.generate_syntax(clean_q, i)
+            
+            st.subheader("📝 الكود المولد (Syntax):")
+            st.code(full_syntax, language="spss")
+            
+            st.download_button(
+                "💾 تحميل ملف Syntax (.sps)",
+                full_syntax,
+                "Smart_Solution.sps",
+                mime="text/plain"
+            )
+            
+        except Exception as e:
+            st.error(f"حدث خطأ: {str(e)}")
+            st.write("التفاصيل:", e)
 
 if __name__ == "__main__":
     main()
